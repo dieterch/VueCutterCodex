@@ -100,6 +100,10 @@ export function useCutting() {
     resetMarkers()
     cutlist.value = []
     dialogOpen.value = false
+    cutInfo.value = null
+    submitting.value = false
+    inplace.value = true
+    useffmpeg.value = true
   }
 
   return {
