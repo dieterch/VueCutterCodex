@@ -1,0 +1,5 @@
+source ./venv/bin/activate
+python -OO worker.py
+echo "sleep for 10 sec ..."
+sleep 10
+echo "done."

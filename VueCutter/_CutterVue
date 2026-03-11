@@ -1,0 +1,7 @@
+pushd /root/prog/python/VueCutter
+tmux \
+new-session -s 'CutterVue' 'while true; do source _startCutter; done' \; \
+split-window 'while true; do source _startWorker; done' \; \
+split-window -h 'source _rqinfo' \; \
+# detach -s 'CutterVue'
+popd

@@ -1,0 +1,3 @@
+source ./venv/bin/activate
+RPW=$(cat config.toml | grep redispw | sed -e "s|redispw =\(.*\)|\1|" | tr -d "'[:space:]")
+cmd="rq info -u redis://:$RPW@localhost:6379 --interval 1"; eval $cmd

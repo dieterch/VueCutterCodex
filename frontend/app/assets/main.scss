@@ -1,0 +1,16 @@
+:root {
+  color-scheme: light;
+}
+
+html,
+body,
+#__nuxt {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at top left, rgba(190, 215, 255, 0.35), transparent 30%),
+    linear-gradient(180deg, #f5f7fb 0%, #eef3f8 100%);
+}

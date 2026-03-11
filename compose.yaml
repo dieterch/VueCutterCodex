@@ -1,0 +1,53 @@
+services:
+  web:
+    build: .
+    privileged: true
+    #ports:
+    #  - "8200:5200"
+    # expose:
+    #   - 5200
+    volumes:
+      - /etc/smbcredentials:/etc/smbcredentials:ro
+      - ./VueCutter:/code
+      #- ./certs:/etc/certs
+    restart: unless-stopped
+    labels:
+      # enable traefik docker autodetection
+      - "traefik.enable=true"
+
+      # Router for dvuecutter.home.smallfamilybusiness.net
+      - "traefik.http.routers.dvuecutter-smallfamily.rule=Host(`dvuecutter.home.smallfamilybusiness.net`)"
+      - "traefik.http.routers.dvuecutter-smallfamily.entrypoints=https"
+      - "traefik.http.routers.dvuecutter-smallfamily.tls=true"
+      - "traefik.http.routers.dvuecutter-smallfamily.tls.certresolver=letsencrypt"
+
+      - "traefik.http.middlewares.dvuecutter-headers.headers.customrequestheaders.X-Forwarded-Proto=https"
+
+      # ForwardAuth middleware pointing to the auth server
+      #- "traefik.http.routers.dvuecutter-smallfamily.middlewares=authserver@file"
+      #- "traefik.http.routers.dvuecutter-smallfamily.middlewares=authentik@file"
+      - "traefik.http.routers.dvuecutter-smallfamily.middlewares=authelia@file"
+
+      # Common service
+      - "traefik.http.services.dvuecutter.loadbalancer.server.port=5200"
+      - "traefik.docker.network=traefik_network"
+
+    environment:
+      FLASK_DEBUG: "true"
+      IN_DOCKER: "true"
+
+    networks:
+      - traefik_network
+      - intern
+
+  redis:
+    image: "redis:alpine"
+    restart: unless-stopped
+    networks:
+      - intern
+
+networks:
+  traefik_network:
+    external: true
+  intern:
+    driver: bridge

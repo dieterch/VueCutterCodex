@@ -1,0 +1,73 @@
+services:
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    ports:
+      - "${VUECUTTER_REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    depends_on:
+      - redis
+    environment:
+      IN_DOCKER: "true"
+      PLEXDATA_CONFIG: /app/config.toml
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      VUECUTTER_REDIS_PASSWORD: ${REDIS_PASSWORD}
+      VUECUTTER_MEDIA_ROOT: ${VUECUTTER_MEDIA_ROOT:-/media}
+      VUECUTTER_MEDIA_KEEP_SHARE: ${VUECUTTER_MEDIA_KEEP_SHARE:-true}
+      VUECUTTER_FILESERVER: ${VUECUTTER_FILESERVER:-}
+      VUECUTTER_FILESERVER_MAC: ${VUECUTTER_FILESERVER_MAC:-}
+      VUECUTTER_PLEX_URL: ${VUECUTTER_PLEX_URL:-}
+      VUECUTTER_PLEX_TOKEN: ${VUECUTTER_PLEX_TOKEN:-}
+      VUECUTTER_WOL_URL: ${VUECUTTER_WOL_URL:-}
+    ports:
+      - "${VUECUTTER_BACKEND_PORT:-5200}:5200"
+    volumes:
+      - ${HOST_CONFIG_PATH:-./VueCutter/config.toml}:/app/config.toml:ro
+      - ${HOST_MEDIA_PATH:-/srv/media}:${VUECUTTER_MEDIA_ROOT:-/media}:rw
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    depends_on:
+      - redis
+    command: ["/app/docker/worker-entrypoint.sh"]
+    environment:
+      IN_DOCKER: "true"
+      PLEXDATA_CONFIG: /app/config.toml
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      VUECUTTER_REDIS_PASSWORD: ${REDIS_PASSWORD}
+      VUECUTTER_MEDIA_ROOT: ${VUECUTTER_MEDIA_ROOT:-/media}
+      VUECUTTER_MEDIA_KEEP_SHARE: ${VUECUTTER_MEDIA_KEEP_SHARE:-true}
+      VUECUTTER_FILESERVER: ${VUECUTTER_FILESERVER:-}
+      VUECUTTER_FILESERVER_MAC: ${VUECUTTER_FILESERVER_MAC:-}
+      VUECUTTER_PLEX_URL: ${VUECUTTER_PLEX_URL:-}
+      VUECUTTER_PLEX_TOKEN: ${VUECUTTER_PLEX_TOKEN:-}
+      VUECUTTER_WOL_URL: ${VUECUTTER_WOL_URL:-}
+    volumes:
+      - ${HOST_CONFIG_PATH:-./VueCutter/config.toml}:/app/config.toml:ro
+      - ${HOST_MEDIA_PATH:-/srv/media}:${VUECUTTER_MEDIA_ROOT:-/media}:rw
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    depends_on:
+      - backend
+    environment:
+      NUXT_PUBLIC_API_BASE: ${NUXT_PUBLIC_API_BASE:-http://localhost:5200}
+    ports:
+      - "${VUECUTTER_FRONTEND_PORT:-3000}:3000"
+
+volumes:
+  redis-data:

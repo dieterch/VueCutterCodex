@@ -1,0 +1,10 @@
+if [ -z "$1" ]; then
+    echo "Usage: _emptyRQueue <queue>"
+    return 1
+else
+    source ./venv/bin/activate
+    echo "Emptying RQ queue $1"
+    RPW=$(cat config.toml | grep redispw | sed -e "s|redispw =\(.*\)|\1|" | tr -d "'[:space:]")
+    cmd="rq requeue -a --queue $1 -u redis://:$RPW@localhost:6379"; eval $cmd
+    cmd="rq empty $1 -u redis://:$RPW@localhost:6379"; eval $cmd
+fi
