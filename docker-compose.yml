@@ -81,7 +81,8 @@ services:
     depends_on:
       - backend
     environment:
-      API_PROXY_BASE: http://backend:5200
+      # API_PROXY_BASE: http://backend:5200
+      API_PROXY_BASE: ${API_PROXY_BASE:-http://backend:5200}
       NUXT_PUBLIC_API_BASE: ""
     ports:
       - "${VUECUTTER_FRONTEND_PORT:-8200}:3000"

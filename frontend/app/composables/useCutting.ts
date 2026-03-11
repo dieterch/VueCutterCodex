@@ -14,7 +14,7 @@ type CutInfo = {
 
 export function useCutting() {
   const { apiFetch } = useApi()
-  const { refreshProgress } = usePlayback()
+  const { refreshProgress, startProgressPolling } = usePlayback()
 
   const cutStart = useState('cutStart', () => '')
   const cutEnd = useState('cutEnd', () => '')
@@ -24,6 +24,7 @@ export function useCutting() {
   const useffmpeg = useState('cutUseffmpeg', () => true)
   const cutInfo = useState<CutInfo | null>('cutInfo', () => null)
   const submitting = useState('cutSubmitting', () => false)
+  const submissionError = useState('cutSubmissionError', () => '')
 
   function resetMarkers() {
     cutStart.value = ''
@@ -77,6 +78,7 @@ export function useCutting() {
       return
     }
     submitting.value = true
+    submissionError.value = ''
     try {
       await apiFetch('/api/cut', {
         method: 'POST',
@@ -91,6 +93,10 @@ export function useCutting() {
       })
       dialogOpen.value = false
       await refreshProgress()
+      startProgressPolling()
+    } catch (error: any) {
+      submissionError.value = error?.data?.error || error?.message || 'Unable to start cut.'
+      throw error
     } finally {
       submitting.value = false
     }
@@ -102,6 +108,7 @@ export function useCutting() {
     dialogOpen.value = false
     cutInfo.value = null
     submitting.value = false
+    submissionError.value = ''
     inplace.value = true
     useffmpeg.value = true
   }
@@ -115,6 +122,7 @@ export function useCutting() {
     useffmpeg,
     cutInfo,
     submitting,
+    submissionError,
     addInterval,
     openDialog,
     submit,

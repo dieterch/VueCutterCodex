@@ -216,6 +216,17 @@ async def api_update_section():
         return json_error(str(exc))
 
 
+@app.route("/api/selection/reload", methods=['POST'])
+async def api_reload_section():
+    try:
+        req = await read_json_request()
+        section = req.get('section', plexdata.section_title)
+        await plexdata._update_section(section, force=True)
+        return plexdata.get_selection()
+    except Exception as exc:
+        return json_error(str(exc))
+
+
 @app.route("/api/selection/series", methods=['POST'])
 async def api_update_series():
     try:
@@ -240,6 +251,15 @@ async def api_update_season():
 async def api_update_movie():
     try:
         req = await read_json_request()
+        section = req.get('section')
+        serie = req.get('serie')
+        season = req.get('season')
+        if section:
+            await plexdata._update_section(section)
+        if serie:
+            await plexdata._update_serie(serie)
+        if season:
+            await plexdata._update_season(season)
         await plexdata._update_movie(req.get('movie', ''))
         return plexdata.get_selection()
     except Exception as exc:

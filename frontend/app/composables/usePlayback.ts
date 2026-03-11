@@ -24,6 +24,8 @@ export function usePlayback() {
     started: 0,
     status: 'idle',
   }))
+  const polling = useState('progressPolling', () => false)
+  const pollingTimer = useState<ReturnType<typeof setInterval> | null>('progressPollingTimer', () => null)
 
   async function loadFrame(movieName: string, posTime: string) {
     if (!movieName) {
@@ -41,7 +43,7 @@ export function usePlayback() {
           pos_time: posTime,
         },
       })
-      frameUrl.value = normalizeFrameUrl(response.frame)
+      frameUrl.value = withCacheBust(normalizeFrameUrl(response.frame))
       frameError.value = ''
       mediaAvailable.value = true
     } catch (error: any) {
@@ -64,6 +66,29 @@ export function usePlayback() {
     progress.value = await apiFetch<ProgressState>('/api/progress')
   }
 
+  function stopProgressPolling() {
+    if (pollingTimer.value) {
+      clearInterval(pollingTimer.value)
+      pollingTimer.value = null
+    }
+    polling.value = false
+  }
+
+  function startProgressPolling(intervalMs = 3000) {
+    stopProgressPolling()
+    polling.value = true
+    pollingTimer.value = setInterval(async () => {
+      try {
+        await refreshProgress()
+        if (progress.value.status === 'idle' && progress.value.started === 0) {
+          stopProgressPolling()
+        }
+      } catch {
+        stopProgressPolling()
+      }
+    }, intervalMs)
+  }
+
   return {
     positionSeconds,
     frameUrl,
@@ -71,9 +96,12 @@ export function usePlayback() {
     frameError,
     mediaAvailable,
     progress,
+    polling,
     loadFrame,
     clearFrameState,
     refreshProgress,
+    startProgressPolling,
+    stopProgressPolling,
   }
 }
 
@@ -92,4 +120,12 @@ function normalizeFrameUrl(url: string) {
     }
   }
   return url
+}
+
+function withCacheBust(url: string) {
+  if (!url) {
+    return ''
+  }
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}t=${Date.now()}`
 }

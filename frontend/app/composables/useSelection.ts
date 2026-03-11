@@ -44,6 +44,14 @@ export function useSelection() {
     movieInfo.value = await apiFetch<{ movie_info: MovieInfo }>('/api/movie').then((res) => res.movie_info)
   }
 
+  async function reloadSection(section?: string) {
+    selection.value = await apiFetch<SectionState>('/api/selection/reload', {
+      method: 'POST',
+      body: { section: section || selection.value?.section || '' },
+    })
+    movieInfo.value = await apiFetch<{ movie_info: MovieInfo }>('/api/movie').then((res) => res.movie_info)
+  }
+
   async function selectSeries(serie: string) {
     selection.value = await apiFetch<SectionState>('/api/selection/series', {
       method: 'POST',
@@ -63,7 +71,12 @@ export function useSelection() {
   async function selectMovie(movie: string) {
     selection.value = await apiFetch<SectionState>('/api/selection/movie', {
       method: 'POST',
-      body: { movie },
+      body: {
+        section: selection.value?.section || '',
+        serie: selection.value?.serie || '',
+        season: selection.value?.season || '',
+        movie,
+      },
     })
     movieInfo.value = await apiFetch<{ movie_info: MovieInfo }>('/api/movie').then((res) => res.movie_info)
   }
@@ -73,6 +86,7 @@ export function useSelection() {
     movieInfo,
     loading,
     refreshSelection,
+    reloadSection,
     selectSection,
     selectSeries,
     selectSeason,

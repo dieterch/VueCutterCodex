@@ -1,7 +1,7 @@
 <script setup lang="ts">
 const { posToStr, strToPos, posValid } = useTimecode()
-const { selection, movieInfo, loading, refreshSelection, selectSection, selectSeries, selectSeason, selectMovie } = useSelection()
-const { positionSeconds, frameUrl, frameLoading, frameError, mediaAvailable, loadFrame, clearFrameState, refreshProgress, progress } = usePlayback()
+const { selection, movieInfo, loading, refreshSelection, reloadSection, selectSection, selectSeries, selectSeason, selectMovie } = useSelection()
+const { positionSeconds, frameUrl, frameLoading, frameError, mediaAvailable, loadFrame, clearFrameState, refreshProgress, progress, polling } = usePlayback()
 const {
   enabled: timelineEnabled,
   request: timelineRequest,
@@ -19,6 +19,7 @@ const {
   useffmpeg,
   cutInfo,
   submitting,
+  submissionError,
   addInterval,
   openDialog,
   submit,
@@ -42,6 +43,10 @@ const jumpButtons = [
   { label: `-1'`, delta: -60 },
   { label: `-30"`, delta: -30 },
   { label: `-10"`, delta: -10 },
+  { label: `-5"`, delta: -5 },
+  { label: `-1"`, delta: -1 },
+  { label: `+1"`, delta: 1 },
+  { label: `+5"`, delta: 5 },
   { label: `+10"`, delta: 10 },
   { label: `+30"`, delta: 30 },
   { label: `+1'`, delta: 60 },
@@ -125,7 +130,7 @@ async function submitCut() {
   if (!selection.value?.section || !selection.value?.movie || mediaActionsDisabled.value) {
     return
   }
-  await submit(selection.value.section, selection.value.movie)
+  await submit(selection.value.section, selection.value.movie).catch(() => {})
 }
 
 function removeCutInterval(index: number) {
@@ -170,6 +175,16 @@ onMounted(async () => {
   await refreshSelection()
   await refreshProgress()
 })
+
+async function reloadCurrentSection() {
+  if (!selection.value?.section) {
+    return
+  }
+  await reloadSection(selection.value.section)
+  positionSeconds.value = 0
+  clearFrameState()
+  timelineItems.value = []
+}
 </script>
 
 <template>
@@ -187,10 +202,15 @@ onMounted(async () => {
         </v-row>
 
         <v-row>
-          <v-col cols="12" md="4">
+          <v-col cols="12" lg="3">
             <v-card rounded="xl" elevation="2">
               <v-card-title>Selection</v-card-title>
               <v-card-text>
+                <div class="d-flex justify-end mb-2">
+                  <v-btn size="small" variant="text" @click="reloadCurrentSection">
+                    Reload Section
+                  </v-btn>
+                </div>
                 <v-select
                   :items="selection?.sections ?? []"
                   :model-value="selection?.section ?? null"
@@ -225,7 +245,7 @@ onMounted(async () => {
             </v-card>
           </v-col>
 
-          <v-col cols="12" md="4">
+          <v-col cols="12" lg="3">
             <v-card rounded="xl" elevation="2">
               <v-card-title>Movie Info</v-card-title>
               <v-card-text>
@@ -243,12 +263,13 @@ onMounted(async () => {
                 <div><strong>Title:</strong> {{ progress.title }}</div>
                 <div><strong>Cut:</strong> {{ progress.cut_progress }}%</div>
                 <div><strong>APSC:</strong> {{ progress.apsc_progress }}%</div>
+                <div><strong>Polling:</strong> {{ polling ? 'active' : 'idle' }}</div>
                 <v-btn class="mt-4" color="primary" @click="refreshProgress">Refresh Progress</v-btn>
               </v-card-text>
             </v-card>
           </v-col>
 
-          <v-col cols="12" md="4">
+          <v-col cols="12" lg="6">
             <v-card rounded="xl" elevation="2">
               <v-card-title>Preview</v-card-title>
               <v-card-text>
@@ -273,20 +294,19 @@ onMounted(async () => {
                   v-if="frameUrl"
                   :src="frameUrl"
                   aspect-ratio="16/9"
-                  cover
-                  class="rounded-lg border"
+                  contain
+                  class="rounded-lg border preview-frame"
                 />
 
                 <v-skeleton-loader
                   v-else-if="frameLoading"
                   type="image"
-                  class="rounded-lg"
+                  class="rounded-lg preview-frame"
                 />
 
                 <v-sheet
                   v-else
-                  class="d-flex align-center justify-center rounded-lg border pa-8 text-medium-emphasis"
-                  min-height="260"
+                  class="d-flex align-center justify-center rounded-lg border pa-8 text-medium-emphasis preview-frame"
                 >
                   No preview loaded.
                 </v-sheet>
@@ -344,7 +364,7 @@ onMounted(async () => {
         </v-row>
 
         <v-row class="mt-2">
-          <v-col cols="12" md="6">
+          <v-col cols="12" lg="5">
             <v-card rounded="xl" elevation="2">
               <v-card-title>Cut Markers</v-card-title>
               <v-card-text>
@@ -366,7 +386,7 @@ onMounted(async () => {
             </v-card>
           </v-col>
 
-          <v-col cols="12" md="6">
+          <v-col cols="12" lg="7">
             <v-card rounded="xl" elevation="2">
               <v-card-title>Cutlist</v-card-title>
               <v-card-text>
@@ -408,6 +428,13 @@ onMounted(async () => {
           <v-card rounded="xl">
             <v-card-title>Cut Dialog</v-card-title>
             <v-card-text>
+              <v-alert
+                v-if="submissionError"
+                type="error"
+                variant="tonal"
+                class="mb-4"
+                :text="submissionError"
+              />
               <v-table density="compact">
                 <tbody>
                   <tr><td>Section</td><td>{{ selection?.section ?? '-' }}</td></tr>
@@ -474,5 +501,15 @@ onMounted(async () => {
 .timeline-item span {
   font-size: 12px;
   font-weight: 600;
+}
+
+.preview-frame {
+  min-height: 420px;
+}
+
+@media (min-width: 1400px) {
+  .preview-frame {
+    min-height: 520px;
+  }
 }
 </style>
