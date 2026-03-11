@@ -6,6 +6,11 @@ import subprocess
 import shlex
 from pprint import pformat as pf
 
+class MediaUnavailableError(FileNotFoundError):
+	def __init__(self, path):
+		super().__init__(f"Media source unavailable: '{path}' is missing. Ensure the NAS is online and the host media path is mounted.")
+		self.path = path
+
 class CutterInterface:
 	def __init__(self, server):
 		self._server = server
@@ -67,6 +72,13 @@ class CutterInterface:
 		"""
 		return self._foldername(movie) + self._filename(movie)		
 
+	def ensure_media(self, movie):
+		self.mount(movie)
+		path = self._pathname(movie)
+		if not os.path.exists(path):
+			raise MediaUnavailableError(path)
+		return path
+
 	def _cutfilename(self,movie):
 		"""
 		the movie cut filename
@@ -105,7 +117,7 @@ class CutterInterface:
 			targetname =  f"{self._pathname(movie)}"
 		else:
 			targetname =  f"{self._cutname(movie)}"  
-		self.mount(movie)
+		self.ensure_media(movie)
 		cl = sum([self.cutlength(cut['t0'],cut['t1']) for cut in cutlist])
 		ml = (movie.duration / 60000)
 		faktor = cl/ml
@@ -139,7 +151,7 @@ class CutterInterface:
 		if useffmpeg:
 			return 100
 		else:
-			self.mount(movie)
+			self.ensure_media(movie)
 			cl = sum([self.cutlength(cut['t0'],cut['t1']) for cut in cutlist])
 			ml = (movie.duration / 60000)
 			faktor = cl/ml
@@ -258,6 +270,7 @@ class CutterInterface:
 
 	def frame(self, ftime, scale, movie, ftarget):
 		t0 = time.time()
+		self.ensure_media(movie)
 		ffstr2 = f"""ffmpeg -ss {ftime} -i "{self._pathname(movie)}" -vframes 1 -q:v 15 \
 -vf "scale={scale}:-1, drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf: \
 x=(w-text_w)/2: y=(h-text_h)*0.98: fontsize=18: fontcolor=yellow: \
@@ -284,7 +297,7 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 		exc_lst = [self._ffmpeg_binary,"-ss", ftime, "-i", f"{self._pathname(movie)}", 
 			"-vframes", "1", "-q:v", "15", "-vf" ,"scale=1024:-1",f"{ftarget}", "-hide_banner", "-loglevel", "fatal", 
 			"-max_error_rate","1","-y" ]
-		self.mount(movie)
+		self.ensure_media(movie)
 		try:
 			res = subprocess.check_output(exc_lst)
 			res = res.decode('utf-8')
@@ -307,7 +320,7 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 		exc_lst = [self._ffmpeg_binary,"-ss", ftime, "-i", f"{self._pathname(movie)}", 
 			"-vframes", "1", "-q:v", "15", "-vf" ,"scale=1024:-1",f"{ftarget}", "-hide_banner", "-loglevel", "fatal", 
 			"-max_error_rate","1","-y" ]
-		self.mount(movie)
+		self.ensure_media(movie)
 		try:
 			res = await subprocess.check_output(exc_lst)
 			res = res.decode('utf-8')
@@ -323,7 +336,7 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 	def _apsc(self,movie):
 		#check ob .ap und Datei existiert.
 		try:
-			self.mount(movie)
+			self.ensure_media(movie)
 			return os.path.exists(self._pathname(movie)+'.ap')
 		except FileNotFoundError as e:
 			print(str(e))
@@ -340,7 +353,7 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 	def _cutfile(self,movie):
 		#check ob *_cut.ts Datei existiert.
 		try:
-			self.mount(movie)
+			self.ensure_media(movie)
 			return os.path.exists(self._cutname(movie))
 		except FileNotFoundError as e:
 			print(str(e))
@@ -450,7 +463,7 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 			'inplace': inplace,
 			'useffmpeg': useffmpeg
 		}
-		self.mount(movie)
+		self.ensure_media(movie)
 		#check ob .ap und .sc Dateien existieren, wenn nicht, erzeugen
 		restxt += f"{self._filename(movie)} exists ? {os.path.exists(self._pathname(movie))}\n"
 		restxt += f"{self._filename(movie)+'.ap'} exists ? {os.path.exists(self._pathname(movie)+'.ap')}\n"

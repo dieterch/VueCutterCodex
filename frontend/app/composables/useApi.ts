@@ -3,7 +3,7 @@ export function useApi() {
 
   const apiFetch = <T>(path: string, options: Parameters<typeof $fetch<T>>[1] = {}) => {
     return $fetch<T>(path, {
-      baseURL: config.public.apiBase,
+      baseURL: config.public.apiBase || '',
       ...options,
     })
   }

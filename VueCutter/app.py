@@ -273,8 +273,10 @@ async def api_frame():
         req = await read_json_request()
         filename = await plexdata._frame(req)
         return {'frame': frame_url(filename, external=True)}
-    except Exception:
-        return {'frame': frame_url('error.png', external=True)}
+    except FileNotFoundError as exc:
+        return json_error(str(exc), status=503)
+    except Exception as exc:
+        return json_error(str(exc))
 
 
 @app.route("/api/timeline", methods=['POST'])
@@ -322,11 +324,19 @@ async def dowolserver():
 # deliver the vuetify frontend
 @app.route("/")
 async def index():
-    try:
-        return await render_template('index.html', plexdata=plexdata._selection)
-    except Exception as e:
-        print(f"index: {e}")
-        return abort(500)
+    return {
+        'service': 'vuecutter-backend',
+        'status': 'ok',
+        'ui_url': os.getenv('VUECUTTER_UI_URL', 'http://localhost:8200'),
+        'api': {
+            'selection': '/api/selection',
+            'movie': '/api/movie',
+            'frame': '/api/frame',
+            'timeline': '/api/timeline',
+            'cut': '/api/cut',
+            'progress': '/api/progress',
+        },
+    }
 
 if __name__ == '__main__':
     print('''

@@ -1,131 +1,187 @@
 <script setup lang="ts">
+const { posToStr, strToPos, posValid } = useTimecode()
 const { selection, movieInfo, loading, refreshSelection, selectSection, selectSeries, selectSeason, selectMovie } = useSelection()
-const { frameUrl, progress, loadFrame, refreshProgress } = usePlayback()
+const { positionSeconds, frameUrl, frameLoading, frameError, mediaAvailable, loadFrame, clearFrameState, refreshProgress, progress } = usePlayback()
 
-const position = ref('00:00:00')
-
-onMounted(async () => {
-  await refreshSelection()
-  if (selection.value?.movie) {
-    await loadFrame(selection.value.movie, position.value)
-  }
-  await refreshProgress()
-})
-
-watch(
-  () => selection.value?.movie,
-  async (movie) => {
-    if (!movie) {
-      return
-    }
-    position.value = '00:00:00'
-    await loadFrame(movie, position.value)
+const durationSeconds = computed(() => Math.trunc((movieInfo.value?.duration_ms ?? 0) / 1000))
+const positionString = computed({
+  get: () => posToStr(positionSeconds.value),
+  set: (value: string) => {
+    positionSeconds.value = posValid(strToPos(value), durationSeconds.value)
   },
-)
+})
 
 async function refreshFrame() {
   if (!selection.value?.movie) {
+    clearFrameState()
     return
   }
-  await loadFrame(selection.value.movie, position.value)
+  positionSeconds.value = posValid(positionSeconds.value, durationSeconds.value)
+  await loadFrame(selection.value.movie, posToStr(positionSeconds.value)).catch(() => {})
 }
+
+async function changeSection(value: string) {
+  await selectSection(value)
+  positionSeconds.value = 0
+  clearFrameState()
+}
+
+async function changeSeries(value: string) {
+  await selectSeries(value)
+  positionSeconds.value = 0
+  clearFrameState()
+}
+
+async function changeSeason(value: string) {
+  await selectSeason(value)
+  positionSeconds.value = 0
+  clearFrameState()
+}
+
+async function changeMovie(value: string) {
+  await selectMovie(value)
+  positionSeconds.value = 0
+  clearFrameState()
+}
+
+onMounted(async () => {
+  await refreshSelection()
+  await refreshProgress()
+})
 </script>
 
 <template>
   <v-app>
     <v-main>
       <v-container class="py-8">
-        <v-row class="mb-6" align="stretch">
-          <v-col cols="12" md="8">
-            <v-sheet elevation="2" rounded="xl" class="pa-6">
-              <div class="text-overline mb-2">VueCutter Next</div>
-              <h1 class="text-h4 font-weight-bold mb-3">Nuxt 4 migration workspace</h1>
-              <p class="text-body-1 mb-0">
-                This frontend talks to the new `/api/...` contract while the existing Python cutting engine stays in place.
-              </p>
-            </v-sheet>
-          </v-col>
-          <v-col cols="12" md="4">
-            <v-sheet elevation="2" rounded="xl" class="pa-6 fill-height">
-              <div class="text-overline mb-2">Worker Status</div>
-              <div class="text-h6 mb-2">{{ progress.status }}</div>
-              <div class="text-body-2">Title: {{ progress.title }}</div>
-              <div class="text-body-2">Cut: {{ progress.cut_progress }}%</div>
-              <div class="text-body-2">APSC: {{ progress.apsc_progress }}%</div>
-              <v-btn class="mt-4" color="primary" variant="flat" @click="refreshProgress">Refresh Progress</v-btn>
-            </v-sheet>
+        <v-row>
+          <v-col cols="12">
+            <v-alert
+              type="info"
+              variant="tonal"
+              text="This screen is intentionally minimal until the NAS/media mount is configured. Plex selection and metadata should work even when the media source is offline."
+            />
           </v-col>
         </v-row>
 
         <v-row>
           <v-col cols="12" md="4">
-            <v-sheet elevation="2" rounded="xl" class="pa-4">
-              <div class="d-flex align-center justify-space-between mb-4">
-                <div class="text-h6">Selection</div>
-                <v-btn size="small" variant="text" @click="refreshSelection">Reload</v-btn>
-              </div>
+            <v-card rounded="xl" elevation="2">
+              <v-card-title>Selection</v-card-title>
+              <v-card-text>
+                <v-select
+                  :items="selection?.sections ?? []"
+                  :model-value="selection?.section ?? null"
+                  :loading="loading"
+                  label="Section"
+                  @update:model-value="changeSection"
+                />
 
-              <v-select
-                :items="selection?.sections ?? []"
-                :model-value="selection?.section"
-                label="Section"
-                :loading="loading"
-                @update:model-value="selectSection"
-              />
+                <v-select
+                  v-if="selection?.section_type === 'show'"
+                  :items="selection?.series ?? []"
+                  :model-value="selection?.serie ?? null"
+                  label="Series"
+                  @update:model-value="changeSeries"
+                />
 
-              <v-select
-                v-if="selection?.section_type === 'show'"
-                :items="selection?.series ?? []"
-                :model-value="selection?.serie"
-                label="Series"
-                @update:model-value="selectSeries"
-              />
+                <v-select
+                  v-if="selection?.section_type === 'show'"
+                  :items="selection?.seasons ?? []"
+                  :model-value="selection?.season ?? null"
+                  label="Season"
+                  @update:model-value="changeSeason"
+                />
 
-              <v-select
-                v-if="selection?.section_type === 'show'"
-                :items="selection?.seasons ?? []"
-                :model-value="selection?.season"
-                label="Season"
-                @update:model-value="selectSeason"
-              />
-
-              <v-select
-                :items="selection?.movies ?? []"
-                :model-value="selection?.movie"
-                label="Movie"
-                @update:model-value="selectMovie"
-              />
-            </v-sheet>
+                <v-select
+                  :items="selection?.movies ?? []"
+                  :model-value="selection?.movie ?? null"
+                  label="Movie"
+                  @update:model-value="changeMovie"
+                />
+              </v-card-text>
+            </v-card>
           </v-col>
 
           <v-col cols="12" md="4">
-            <v-sheet elevation="2" rounded="xl" class="pa-4">
-              <div class="text-h6 mb-4">Playback Preview</div>
-              <v-text-field
-                v-model="position"
-                label="Position (HH:MM:SS)"
-                hide-details="auto"
-              />
-              <v-btn class="mt-3" color="primary" @click="refreshFrame">Load Frame</v-btn>
+            <v-card rounded="xl" elevation="2">
+              <v-card-title>Movie Info</v-card-title>
+              <v-card-text>
+                <div><strong>Title:</strong> {{ movieInfo?.title ?? '-' }}</div>
+                <div><strong>Year:</strong> {{ movieInfo?.year ?? '-' }}</div>
+                <div><strong>Duration:</strong> {{ movieInfo?.duration ?? '-' }} min</div>
+                <div class="mt-3 text-body-2">{{ movieInfo?.summary ?? '-' }}</div>
+              </v-card-text>
+            </v-card>
 
-              <v-img
-                v-if="frameUrl"
-                :src="frameUrl"
-                cover
-                class="mt-4 rounded-lg"
-                aspect-ratio="16/9"
-              />
-            </v-sheet>
+            <v-card rounded="xl" elevation="2" class="mt-4">
+              <v-card-title>Worker Status</v-card-title>
+              <v-card-text>
+                <div><strong>Status:</strong> {{ progress.status }}</div>
+                <div><strong>Title:</strong> {{ progress.title }}</div>
+                <div><strong>Cut:</strong> {{ progress.cut_progress }}%</div>
+                <div><strong>APSC:</strong> {{ progress.apsc_progress }}%</div>
+                <v-btn class="mt-4" color="primary" @click="refreshProgress">Refresh Progress</v-btn>
+              </v-card-text>
+            </v-card>
           </v-col>
 
           <v-col cols="12" md="4">
-            <v-sheet elevation="2" rounded="xl" class="pa-4">
-              <div class="text-h6 mb-4">Movie Info</div>
-              <div class="text-body-2 mb-2"><strong>Title:</strong> {{ movieInfo?.title ?? '-' }}</div>
-              <div class="text-body-2 mb-2"><strong>Year:</strong> {{ movieInfo?.year ?? '-' }}</div>
-              <div class="text-body-2 mb-2"><strong>Duration:</strong> {{ movieInfo?.duration ?? '-' }} min</div>
-              <div class="text-body-2"><strong>Summary:</strong> {{ movieInfo?.summary ?? '-' }}</div>
-            </v-sheet>
+            <v-card rounded="xl" elevation="2">
+              <v-card-title>Preview</v-card-title>
+              <v-card-text>
+                <v-alert
+                  v-if="frameError"
+                  type="warning"
+                  variant="tonal"
+                  class="mb-4"
+                  title="Media source unavailable"
+                  :text="frameError"
+                />
+
+                <v-alert
+                  v-else-if="!mediaAvailable"
+                  type="info"
+                  variant="tonal"
+                  class="mb-4"
+                  text="The NAS or host media mount is unavailable. Frame preview is disabled until the media path exists."
+                />
+
+                <v-img
+                  v-if="frameUrl"
+                  :src="frameUrl"
+                  aspect-ratio="16/9"
+                  cover
+                  class="rounded-lg border"
+                />
+
+                <v-skeleton-loader
+                  v-else-if="frameLoading"
+                  type="image"
+                  class="rounded-lg"
+                />
+
+                <v-sheet
+                  v-else
+                  class="d-flex align-center justify-center rounded-lg border pa-8 text-medium-emphasis"
+                  min-height="260"
+                >
+                  No preview loaded.
+                </v-sheet>
+
+                <div class="d-flex align-center mt-4">
+                  <v-text-field
+                    v-model="positionString"
+                    label="Position"
+                    hide-details
+                    density="comfortable"
+                  />
+                  <v-btn class="ml-2" color="primary" :loading="frameLoading" @click="refreshFrame">
+                    Load Frame
+                  </v-btn>
+                </div>
+              </v-card-text>
+            </v-card>
           </v-col>
         </v-row>
       </v-container>

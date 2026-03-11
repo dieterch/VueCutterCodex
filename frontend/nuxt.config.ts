@@ -4,10 +4,11 @@ export default defineNuxtConfig({
   compatibilityDate: '2026-03-11',
   devtools: { enabled: true },
   ssr: false,
+  srcDir: 'app/',
   css: [
     '@mdi/font/css/materialdesignicons.css',
     'vuetify/styles',
-    '~/app/assets/main.scss',
+    '~/assets/main.scss',
   ],
   build: {
     transpile: ['vuetify'],
@@ -22,8 +23,9 @@ export default defineNuxtConfig({
     },
   },
   runtimeConfig: {
+    apiProxyBase: process.env.API_PROXY_BASE || 'http://backend:5200',
     public: {
-      apiBase: process.env.NUXT_PUBLIC_API_BASE || 'http://localhost:5200',
+      apiBase: process.env.NUXT_PUBLIC_API_BASE || '',
     },
   },
 })

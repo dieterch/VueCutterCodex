@@ -11,6 +11,7 @@ services:
     build:
       context: .
       dockerfile: docker/backend.Dockerfile
+    privileged: true
     depends_on:
       - redis
     environment:
@@ -20,7 +21,7 @@ services:
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       VUECUTTER_REDIS_PASSWORD: ${REDIS_PASSWORD}
-      VUECUTTER_MEDIA_ROOT: ${VUECUTTER_MEDIA_ROOT:-/media}
+      VUECUTTER_MEDIA_ROOT: ${VUECUTTER_MEDIA_ROOT:-}
       VUECUTTER_MEDIA_KEEP_SHARE: ${VUECUTTER_MEDIA_KEEP_SHARE:-true}
       VUECUTTER_FILESERVER: ${VUECUTTER_FILESERVER:-}
       VUECUTTER_FILESERVER_MAC: ${VUECUTTER_FILESERVER_MAC:-}
@@ -30,13 +31,21 @@ services:
     ports:
       - "${VUECUTTER_BACKEND_PORT:-5200}:5200"
     volumes:
+      - ./VueCutter:/app
+      - ./docker:/app/docker
       - ${HOST_CONFIG_PATH:-./VueCutter/config.toml}:/app/config.toml:ro
-      - ${HOST_MEDIA_PATH:-/srv/media}:${VUECUTTER_MEDIA_ROOT:-/media}:rw
+      - type: bind
+        source: /etc/smbcredentials
+        target: /etc/smbcredentials
+        read_only: true
+        bind:
+          create_host_path: false
 
   worker:
     build:
       context: .
       dockerfile: docker/backend.Dockerfile
+    privileged: true
     depends_on:
       - redis
     command: ["/app/docker/worker-entrypoint.sh"]
@@ -47,7 +56,7 @@ services:
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       VUECUTTER_REDIS_PASSWORD: ${REDIS_PASSWORD}
-      VUECUTTER_MEDIA_ROOT: ${VUECUTTER_MEDIA_ROOT:-/media}
+      VUECUTTER_MEDIA_ROOT: ${VUECUTTER_MEDIA_ROOT:-}
       VUECUTTER_MEDIA_KEEP_SHARE: ${VUECUTTER_MEDIA_KEEP_SHARE:-true}
       VUECUTTER_FILESERVER: ${VUECUTTER_FILESERVER:-}
       VUECUTTER_FILESERVER_MAC: ${VUECUTTER_FILESERVER_MAC:-}
@@ -55,8 +64,15 @@ services:
       VUECUTTER_PLEX_TOKEN: ${VUECUTTER_PLEX_TOKEN:-}
       VUECUTTER_WOL_URL: ${VUECUTTER_WOL_URL:-}
     volumes:
+      - ./VueCutter:/app
+      - ./docker:/app/docker
       - ${HOST_CONFIG_PATH:-./VueCutter/config.toml}:/app/config.toml:ro
-      - ${HOST_MEDIA_PATH:-/srv/media}:${VUECUTTER_MEDIA_ROOT:-/media}:rw
+      - type: bind
+        source: /etc/smbcredentials
+        target: /etc/smbcredentials
+        read_only: true
+        bind:
+          create_host_path: false
 
   frontend:
     build:
@@ -65,9 +81,16 @@ services:
     depends_on:
       - backend
     environment:
-      NUXT_PUBLIC_API_BASE: ${NUXT_PUBLIC_API_BASE:-http://localhost:5200}
+      API_PROXY_BASE: http://backend:5200
+      NUXT_PUBLIC_API_BASE: ""
     ports:
-      - "${VUECUTTER_FRONTEND_PORT:-3000}:3000"
+      - "${VUECUTTER_FRONTEND_PORT:-8200}:3000"
+    volumes:
+      - ./frontend:/app
+      - frontend-node-modules:/app/node_modules
+      - frontend-nuxt:/app/.nuxt
 
 volumes:
   redis-data:
+  frontend-node-modules:
+  frontend-nuxt:

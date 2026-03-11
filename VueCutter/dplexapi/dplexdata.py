@@ -306,6 +306,7 @@ class Plexdata:
         step = int(req['step']); 
         size = req['size']
         m = self._selection['movie']
+        self.cutter.ensure_media(m)
         target = self.basedir + "/dist/static/"+ basename
         tl = self.cutter.gen_timeline(m.duration // 1000, pos, l, r, step)
         r = self.cutter.timeline(m, target , size, tl)
@@ -338,6 +339,7 @@ class Plexdata:
     async def _movie_cut_info(self):
         if self.plex is not None:
             m = self._selection['movie']
+            self.cutter.ensure_media(m)
             dmin = m.duration / 60000
             apsc = self.cutter._apsc(m)
             cutfile = self.cutter._cutfile(m)
@@ -358,12 +360,13 @@ class Plexdata:
                 pos_time = req['pos_time']
                 try:
                     m = await self._update_movie(movie_name)
+                    self.cutter.ensure_media(m)
                     pic_name = await self.cutter.aframe(m ,pos_time ,self.basedir + "/dist/static/")
-                except subprocess.CalledProcessError as e:
+                except (subprocess.CalledProcessError, FileNotFoundError) as e:
                     print(f"\nframe throws error:\n{str(e)}\n")             
-                    pic_name = 'error.png'
+                    raise e
             else:
-                pic_name = 'error.png'
+                raise ValueError('Missing frame request data')
             return pic_name
         else:
             raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
@@ -376,7 +379,8 @@ class Plexdata:
             inplace = req['inplace']
             useffmpeg= req['useffmpeg']
             s = await self._update_section(section_name)
-            m = await self._update_movie(movie_name)        
+            m = await self._update_movie(movie_name)
+            self.cutter.ensure_media(m)
             res = f"Queue Cut From section '{s}', cut '{m.title}', cutlist{cutlist}, inplace={inplace}, useffmpeg={useffmpeg}"
             try:
                 mm = self.plex.MovieData(m)

@@ -12,7 +12,11 @@ type ProgressState = {
 
 export function usePlayback() {
   const { apiFetch } = useApi()
+  const positionSeconds = useState('positionSeconds', () => 0)
   const frameUrl = useState('frameUrl', () => '')
+  const frameLoading = useState('frameLoading', () => false)
+  const frameError = useState('frameError', () => '')
+  const mediaAvailable = useState('mediaAvailable', () => true)
   const progress = useState<ProgressState>('progress', () => ({
     title: '-',
     cut_progress: 0,
@@ -24,16 +28,36 @@ export function usePlayback() {
   async function loadFrame(movieName: string, posTime: string) {
     if (!movieName) {
       frameUrl.value = ''
+      frameError.value = ''
+      mediaAvailable.value = true
       return
     }
-    const response = await apiFetch<FrameResponse>('/api/frame', {
-      method: 'POST',
-      body: {
-        movie_name: movieName,
-        pos_time: posTime,
-      },
-    })
-    frameUrl.value = response.frame
+    frameLoading.value = true
+    try {
+      const response = await apiFetch<FrameResponse>('/api/frame', {
+        method: 'POST',
+        body: {
+          movie_name: movieName,
+          pos_time: posTime,
+        },
+      })
+      frameUrl.value = normalizeFrameUrl(response.frame)
+      frameError.value = ''
+      mediaAvailable.value = true
+    } catch (error: any) {
+      frameUrl.value = ''
+      frameError.value = error?.data?.error || error?.message || 'Unable to load frame.'
+      mediaAvailable.value = false
+    } finally {
+      frameLoading.value = false
+    }
+  }
+
+  function clearFrameState() {
+    frameUrl.value = ''
+    frameError.value = ''
+    frameLoading.value = false
+    mediaAvailable.value = true
   }
 
   async function refreshProgress() {
@@ -41,9 +65,31 @@ export function usePlayback() {
   }
 
   return {
+    positionSeconds,
     frameUrl,
+    frameLoading,
+    frameError,
+    mediaAvailable,
     progress,
     loadFrame,
+    clearFrameState,
     refreshProgress,
   }
+}
+
+function normalizeFrameUrl(url: string) {
+  if (!url) {
+    return ''
+  }
+  try {
+    const parsed = new URL(url)
+    if (parsed.pathname.startsWith('/static/')) {
+      return `/backend-static/${parsed.pathname.slice('/static/'.length)}`
+    }
+  } catch {
+    if (url.startsWith('/static/')) {
+      return `/backend-static/${url.slice('/static/'.length)}`
+    }
+  }
+  return url
 }
