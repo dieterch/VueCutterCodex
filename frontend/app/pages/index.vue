@@ -339,6 +339,22 @@ async function reloadCurrentSection() {
 
                 <div class="d-flex flex-wrap ga-2 mt-4">
                   <v-btn size="small" variant="tonal" :disabled="mediaActionsDisabled" @click="jumpTo(0)">Start</v-btn>
+                  <v-btn
+                    size="small"
+                    variant="tonal"
+                    :disabled="mediaActionsDisabled"
+                    @click="jumpTo(Math.min(15 * 60, durationSeconds))"
+                  >
+                    +15'
+                  </v-btn>
+                  <v-btn
+                    size="small"
+                    variant="tonal"
+                    :disabled="mediaActionsDisabled"
+                    @click="jumpTo(Math.max(durationSeconds - 15 * 60, 0))"
+                  >
+                    -15'
+                  </v-btn>
                   <v-btn size="small" variant="tonal" :disabled="mediaActionsDisabled" @click="jumpTo(durationSeconds)">End</v-btn>
                   <v-btn size="small" color="primary" :disabled="!mediaAvailable && !timelineEnabled" @click="toggleTimeline">
                     {{ timelineEnabled ? 'Hide Timeline' : 'Show Timeline' }}
