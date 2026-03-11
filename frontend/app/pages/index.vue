@@ -31,6 +31,16 @@ const durationSeconds = computed(() => Math.trunc((movieInfo.value?.duration_ms 
 const safeTimelineItems = computed(() => timelineItems.value.filter((item) => item && item.label))
 const safeCutlist = computed(() => cutlist.value.filter((interval) => interval && interval.t0 && interval.t1))
 const mediaActionsDisabled = computed(() => frameLoading.value || !mediaAvailable.value)
+const markersFormValid = computed(() => Boolean(cutStart.value && cutEnd.value && cutEnd.value > cutStart.value))
+const canOpenCutDialog = computed(() => {
+  if (mediaActionsDisabled.value) {
+    return false
+  }
+  if (timelineRequest.value.step !== 1) {
+    return false
+  }
+  return markersFormValid.value || safeCutlist.value.length > 0
+})
 const positionString = computed({
   get: () => posToStr(positionSeconds.value),
   set: (value: string) => {
@@ -40,6 +50,7 @@ const positionString = computed({
 
 const jumpButtons = [
   { label: `-10'`, delta: -600 },
+  { label: `-5'`, delta: -300 },
   { label: `-1'`, delta: -60 },
   { label: `-30"`, delta: -30 },
   { label: `-10"`, delta: -10 },
@@ -50,6 +61,7 @@ const jumpButtons = [
   { label: `+10"`, delta: 10 },
   { label: `+30"`, delta: 30 },
   { label: `+1'`, delta: 60 },
+  { label: `+5'`, delta: 300 },
   { label: `+10'`, delta: 600 },
 ]
 
@@ -64,10 +76,14 @@ async function refreshFrame() {
 
 async function jump(delta: number) {
   positionSeconds.value = posValid(positionSeconds.value + delta, durationSeconds.value)
+  timelineRequest.value.step = Math.abs(delta) || 1
   if (!mediaAvailable.value) {
     return
   }
   await refreshFrame()
+  if (timelineEnabled.value) {
+    await refreshTimeline()
+  }
 }
 
 async function jumpTo(position: number) {
@@ -113,7 +129,7 @@ function setCutEnd() {
 }
 
 function addCurrentInterval() {
-  if (cutStart.value && cutEnd.value) {
+  if (markersFormValid.value) {
     addInterval({ t0: cutStart.value, t1: cutEnd.value })
     resetMarkers()
   }
@@ -144,6 +160,7 @@ async function changeSection(value: string) {
   positionSeconds.value = 0
   clearFrameState()
   timelineItems.value = []
+  await refreshFrame()
 }
 
 async function changeSeries(value: string) {
@@ -151,6 +168,7 @@ async function changeSeries(value: string) {
   positionSeconds.value = 0
   clearFrameState()
   timelineItems.value = []
+  await refreshFrame()
 }
 
 async function changeSeason(value: string) {
@@ -158,6 +176,7 @@ async function changeSeason(value: string) {
   positionSeconds.value = 0
   clearFrameState()
   timelineItems.value = []
+  await refreshFrame()
 }
 
 async function changeMovie(value: string) {
@@ -165,6 +184,7 @@ async function changeMovie(value: string) {
   positionSeconds.value = 0
   clearFrameState()
   timelineItems.value = []
+  await refreshFrame()
 }
 
 onMounted(async () => {
@@ -184,6 +204,7 @@ async function reloadCurrentSection() {
   positionSeconds.value = 0
   clearFrameState()
   timelineItems.value = []
+  await refreshFrame()
 }
 </script>
 
@@ -191,16 +212,6 @@ async function reloadCurrentSection() {
   <v-app>
     <v-main>
       <v-container class="py-8">
-        <v-row>
-          <v-col cols="12">
-            <v-alert
-              type="info"
-              variant="tonal"
-              text="This screen is intentionally minimal until the NAS/media mount is configured. Plex selection and metadata should work even when the media source is offline."
-            />
-          </v-col>
-        </v-row>
-
         <v-row>
           <v-col cols="12" lg="3">
             <v-card rounded="xl" elevation="2">
@@ -253,18 +264,6 @@ async function reloadCurrentSection() {
                 <div><strong>Year:</strong> {{ movieInfo?.year ?? '-' }}</div>
                 <div><strong>Duration:</strong> {{ movieInfo?.duration ?? '-' }} min</div>
                 <div class="mt-3 text-body-2">{{ movieInfo?.summary ?? '-' }}</div>
-              </v-card-text>
-            </v-card>
-
-            <v-card rounded="xl" elevation="2" class="mt-4">
-              <v-card-title>Worker Status</v-card-title>
-              <v-card-text>
-                <div><strong>Status:</strong> {{ progress.status }}</div>
-                <div><strong>Title:</strong> {{ progress.title }}</div>
-                <div><strong>Cut:</strong> {{ progress.cut_progress }}%</div>
-                <div><strong>APSC:</strong> {{ progress.apsc_progress }}%</div>
-                <div><strong>Polling:</strong> {{ polling ? 'active' : 'idle' }}</div>
-                <v-btn class="mt-4" color="primary" @click="refreshProgress">Refresh Progress</v-btn>
               </v-card-text>
             </v-card>
           </v-col>
@@ -332,14 +331,18 @@ async function reloadCurrentSection() {
                     :disabled="mediaActionsDisabled"
                     @click="jump(button.delta)"
                   >
-                    {{ button.label }}
+                    <span :class="{ 'active-step': Math.abs(button.delta) === timelineRequest.step }">
+                      {{ button.label }}
+                    </span>
                   </v-btn>
                 </div>
 
                 <div class="d-flex flex-wrap ga-2 mt-4">
                   <v-btn size="small" variant="tonal" :disabled="mediaActionsDisabled" @click="jumpTo(0)">Start</v-btn>
                   <v-btn size="small" variant="tonal" :disabled="mediaActionsDisabled" @click="jumpTo(durationSeconds)">End</v-btn>
-                  <v-btn size="small" :disabled="!mediaAvailable && !timelineEnabled" @click="toggleTimeline">Timeline</v-btn>
+                  <v-btn size="small" color="primary" :disabled="!mediaAvailable && !timelineEnabled" @click="toggleTimeline">
+                    {{ timelineEnabled ? 'Hide Timeline' : 'Show Timeline' }}
+                  </v-btn>
                   <v-btn size="small" :disabled="!timelineEnabled || mediaActionsDisabled" @click="pageTimeline(-1)">Page Left</v-btn>
                   <v-btn size="small" :disabled="!timelineEnabled || mediaActionsDisabled" @click="pageTimeline(1)">Page Right</v-btn>
                   <v-btn size="small" :disabled="!timelineEnabled || mediaActionsDisabled" @click="refreshTimeline">Refresh Timeline</v-btn>
@@ -355,7 +358,6 @@ async function reloadCurrentSection() {
                     @click="jumpTo(item.pos)"
                   >
                     <img :src="item.src" :alt="item.label" />
-                    <span>{{ item.label }}</span>
                   </button>
                 </div>
               </v-card-text>
@@ -375,7 +377,7 @@ async function reloadCurrentSection() {
                   <v-btn color="primary" :disabled="mediaActionsDisabled" @click="setCutEnd">
                     End: {{ cutEnd || '--:--:--' }}
                   </v-btn>
-                  <v-btn :disabled="!(cutStart && cutEnd) || mediaActionsDisabled" @click="addCurrentInterval">
+                  <v-btn :disabled="!markersFormValid || mediaActionsDisabled" @click="addCurrentInterval">
                     Add Interval
                   </v-btn>
                   <v-btn color="error" variant="tonal" @click="resetMarkers">
@@ -412,13 +414,28 @@ async function reloadCurrentSection() {
                   </tbody>
                 </v-table>
                 <div class="d-flex flex-wrap ga-2 mt-4">
-                  <v-btn color="primary" :disabled="safeCutlist.length === 0 || mediaActionsDisabled" @click="openCutDialog">
-                    Review Cut
+                  <v-btn color="primary" :disabled="!canOpenCutDialog" @click="openCutDialog">
+                    Open Cut Dialog
                   </v-btn>
                   <v-btn variant="tonal" color="error" @click="resetAll">
                     Reset All
                   </v-btn>
                 </div>
+                <div v-if="timelineRequest.step !== 1" class="text-caption text-medium-emphasis mt-2">
+                  Cut dialog is only enabled at 1" step resolution.
+                </div>
+              </v-card-text>
+            </v-card>
+
+            <v-card rounded="xl" elevation="2" class="mt-4">
+              <v-card-title>Worker Status</v-card-title>
+              <v-card-text>
+                <div><strong>Status:</strong> {{ progress.status }}</div>
+                <div><strong>Title:</strong> {{ progress.title }}</div>
+                <div><strong>Cut:</strong> {{ progress.cut_progress }}%</div>
+                <div><strong>APSC:</strong> {{ progress.apsc_progress }}%</div>
+                <div><strong>Polling:</strong> {{ polling ? 'active' : 'idle' }}</div>
+                <v-btn class="mt-4" color="primary" @click="refreshProgress">Refresh Progress</v-btn>
               </v-card-text>
             </v-card>
           </v-col>
@@ -474,17 +491,17 @@ async function reloadCurrentSection() {
 .timeline-strip {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
-  gap: 8px;
+  gap: 0;
+  overflow: hidden;
 }
 
 .timeline-item {
   border: 0;
-  border-radius: 12px;
-  background: #f4f6fa;
-  padding: 6px;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
   cursor: pointer;
 }
 
@@ -495,12 +512,8 @@ async function reloadCurrentSection() {
 
 .timeline-item img {
   width: 100%;
-  border-radius: 8px;
-}
-
-.timeline-item span {
-  font-size: 12px;
-  font-weight: 600;
+  border-radius: 0;
+  display: block;
 }
 
 .preview-frame {
@@ -511,5 +524,10 @@ async function reloadCurrentSection() {
   .preview-frame {
     min-height: 520px;
   }
+}
+
+.active-step {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
 }
 </style>

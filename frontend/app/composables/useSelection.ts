@@ -45,10 +45,32 @@ export function useSelection() {
   }
 
   async function reloadSection(section?: string) {
+    const previous = {
+      section: section || selection.value?.section || '',
+      serie: selection.value?.serie || '',
+      season: selection.value?.season || '',
+      movie: selection.value?.movie || '',
+    }
+
     selection.value = await apiFetch<SectionState>('/api/selection/reload', {
       method: 'POST',
-      body: { section: section || selection.value?.section || '' },
+      body: { section: previous.section },
     })
+
+    if (selection.value?.section_type === 'show') {
+      if (previous.serie && selection.value?.series?.includes(previous.serie)) {
+        await selectSeries(previous.serie)
+      }
+      if (previous.season && selection.value?.seasons?.includes(previous.season)) {
+        await selectSeason(previous.season)
+      }
+    }
+
+    if (previous.movie && selection.value?.movies?.includes(previous.movie)) {
+      await selectMovie(previous.movie)
+      return
+    }
+
     movieInfo.value = await apiFetch<{ movie_info: MovieInfo }>('/api/movie').then((res) => res.movie_info)
   }
 

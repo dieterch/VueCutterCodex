@@ -64,10 +64,11 @@ export function useCutting() {
   }
 
   async function openDialog(section: string, movie: string) {
-    if (!cutStart.value || !cutEnd.value) {
+    if (cutStart.value && cutEnd.value) {
+      addInterval({ t0: cutStart.value, t1: cutEnd.value })
+    } else if (cutlist.value.length === 0) {
       return false
     }
-    addInterval({ t0: cutStart.value, t1: cutEnd.value })
     await loadCutInfo()
     dialogOpen.value = true
     return true
