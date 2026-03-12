@@ -196,8 +196,15 @@ onMounted(async () => {
   timelineEnabled.value = false
   timelineItems.value = []
   clearFrameState()
-  await refreshSelection()
-  await refreshProgress()
+  try {
+    await refreshSelection()
+  } catch {}
+  if (selection.value?.movie) {
+    await refreshFrame()
+  }
+  try {
+    await refreshProgress()
+  } catch {}
 })
 
 async function reloadCurrentSection() {
