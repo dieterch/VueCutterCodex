@@ -25,14 +25,32 @@ const {
   resetMarkers,
   resetAll,
 } = useCutting()
+const {
+  status: analysisStatus,
+  running: analysisRunning,
+  polling: analysisPolling,
+  draft: analysisDraft,
+  error: analysisError,
+  activeBoundaryId,
+  activeBoundary,
+  start: startAnalysis,
+  reset: resetAnalysis,
+  selectBoundary,
+  setActiveBoundaryTime,
+  applyDraftToCutlist,
+} = useAnalysis()
 
 const durationSeconds = computed(() => Math.trunc((movieInfo.value?.duration_ms ?? 0) / 1000))
 const durationLabel = computed(() => (durationSeconds.value > 0 ? posToStr(durationSeconds.value) : '--:--:--'))
 const positionMinuteLabel = computed(() => `${Math.trunc(positionSeconds.value / 60)}'`)
 const safeTimelineItems = computed(() => timelineItems.value.filter((item) => item && item.label))
 const safeCutlist = computed(() => cutlist.value.filter((interval) => interval && interval.t0 && interval.t1))
+const safeAnalysisBoundaries = computed(() => analysisDraft.value?.boundaries ?? [])
+const safeAnalysisIntervals = computed(() => analysisDraft.value?.keep_intervals ?? [])
+const analysisWarnings = computed(() => analysisDraft.value?.warnings ?? [])
 const mediaActionsDisabled = computed(() => frameLoading.value || !mediaAvailable.value)
 const markersFormValid = computed(() => Boolean(cutStart.value && cutEnd.value && cutEnd.value > cutStart.value))
+const canRunAnalysis = computed(() => Boolean(selection.value?.movie) && !mediaActionsDisabled.value && !analysisRunning.value)
 const canOpenCutDialog = computed(() => {
   if (mediaActionsDisabled.value) {
     return false
@@ -159,11 +177,65 @@ function removeCutInterval(index: number) {
   cutlist.value = next
 }
 
+function resetEverything() {
+  resetAll()
+  resetAnalysis()
+}
+
+function analysisBoundaryLabel(kind: string) {
+  switch (kind) {
+    case 'content_start':
+      return 'Start'
+    case 'content_end':
+      return 'End'
+    case 'ad_start':
+      return 'Ad Start'
+    case 'ad_end':
+      return 'Ad End'
+    default:
+      return kind
+  }
+}
+
+async function focusDetectedBoundary(boundaryId: string) {
+  const boundary = safeAnalysisBoundaries.value.find((entry) => entry.id === boundaryId)
+  if (!boundary) {
+    return
+  }
+  selectBoundary(boundaryId)
+  await jumpTo(strToPos(boundary.time))
+}
+
+function applyCurrentPositionToBoundary() {
+  if (!activeBoundary.value) {
+    return
+  }
+  setActiveBoundaryTime(positionString.value)
+}
+
+function applyDetectedIntervals() {
+  applyDraftToCutlist()
+  resetMarkers()
+}
+
+async function analyzeRecording() {
+  if (!selection.value?.section || !selection.value?.movie || mediaActionsDisabled.value) {
+    return
+  }
+  await startAnalysis({
+    section: selection.value.section,
+    serie: selection.value.serie,
+    season: selection.value.season,
+    movie_name: selection.value.movie,
+  }).catch(() => {})
+}
+
 async function changeSection(value: string) {
   await selectSection(value)
   positionSeconds.value = 0
   clearFrameState()
   timelineItems.value = []
+  resetAnalysis()
   await refreshFrame()
 }
 
@@ -172,6 +244,7 @@ async function changeSeries(value: string) {
   positionSeconds.value = 0
   clearFrameState()
   timelineItems.value = []
+  resetAnalysis()
   await refreshFrame()
 }
 
@@ -180,6 +253,7 @@ async function changeSeason(value: string) {
   positionSeconds.value = 0
   clearFrameState()
   timelineItems.value = []
+  resetAnalysis()
   await refreshFrame()
 }
 
@@ -188,11 +262,13 @@ async function changeMovie(value: string) {
   positionSeconds.value = 0
   clearFrameState()
   timelineItems.value = []
+  resetAnalysis()
   await refreshFrame()
 }
 
 onMounted(async () => {
   resetAll()
+  resetAnalysis()
   timelineEnabled.value = false
   timelineItems.value = []
   clearFrameState()
@@ -215,6 +291,7 @@ async function reloadCurrentSection() {
   positionSeconds.value = 0
   clearFrameState()
   timelineItems.value = []
+  resetAnalysis()
   await refreshFrame()
 }
 </script>
@@ -429,6 +506,9 @@ async function reloadCurrentSection() {
                   <v-btn size="small" color="primary" :disabled="mediaActionsDisabled" @click="setCutEnd">
                     End: {{ cutEnd || '--:--:--' }}
                   </v-btn>
+                  <v-btn size="small" color="secondary" :loading="analysisRunning" :disabled="!canRunAnalysis" @click="analyzeRecording">
+                    Analyze Recording
+                  </v-btn>
                   <v-btn size="small" :disabled="!markersFormValid || mediaActionsDisabled" @click="addCurrentInterval">
                     Add Interval
                   </v-btn>
@@ -438,10 +518,125 @@ async function reloadCurrentSection() {
                   <v-btn size="small" color="error" variant="tonal" @click="resetMarkers">
                     Reset Markers
                   </v-btn>
-                  <v-btn size="small" variant="tonal" color="error" @click="resetAll">
+                  <v-btn size="small" variant="tonal" color="error" @click="resetEverything">
                     Reset All
                   </v-btn>
                 </div>
+
+                <v-alert
+                  v-if="analysisError"
+                  type="error"
+                  variant="tonal"
+                  density="compact"
+                  class="mb-3"
+                  :text="analysisError"
+                />
+
+                <v-card
+                  v-if="analysisRunning || analysisDraft"
+                  variant="tonal"
+                  rounded="lg"
+                  class="analysis-card mb-3"
+                >
+                  <v-card-text class="pa-3">
+                    <div class="analysis-header">
+                      <div>
+                        <strong>Detection Draft</strong>
+                        <span class="text-medium-emphasis">
+                          {{ analysisRunning ? ` ${analysisStatus}` : ` for ${analysisDraft?.movie ?? '-'}` }}
+                        </span>
+                      </div>
+                      <div class="text-caption text-medium-emphasis">
+                        {{ analysisPolling ? 'polling' : 'ready' }}
+                      </div>
+                    </div>
+
+                    <div v-if="analysisDraft" class="analysis-body">
+                      <div class="analysis-actions">
+                        <v-btn
+                          size="small"
+                          color="primary"
+                          variant="tonal"
+                          :disabled="!activeBoundary"
+                          @click="applyCurrentPositionToBoundary"
+                        >
+                          Use Current Position for {{ activeBoundary ? analysisBoundaryLabel(activeBoundary.kind) : 'Marker' }}
+                        </v-btn>
+                        <v-btn
+                          size="small"
+                          color="primary"
+                          :disabled="safeAnalysisIntervals.length === 0"
+                          @click="applyDetectedIntervals"
+                        >
+                          Apply Detected Intervals
+                        </v-btn>
+                      </div>
+
+                      <div v-if="analysisWarnings.length > 0" class="analysis-warnings">
+                        <v-alert
+                          v-for="warning in analysisWarnings"
+                          :key="warning"
+                          type="warning"
+                          density="compact"
+                          variant="text"
+                          :text="warning"
+                        />
+                      </div>
+
+                      <div class="analysis-grid">
+                        <div>
+                          <div class="text-caption text-medium-emphasis mb-2">Detected Boundaries</div>
+                          <div class="analysis-boundaries">
+                            <v-btn
+                              v-for="boundary in safeAnalysisBoundaries"
+                              :key="boundary.id"
+                              size="small"
+                              variant="tonal"
+                              class="analysis-boundary-btn"
+                              :color="activeBoundaryId === boundary.id ? 'primary' : undefined"
+                              @click="focusDetectedBoundary(boundary.id)"
+                            >
+                              {{ analysisBoundaryLabel(boundary.kind) }}: {{ boundary.time }}
+                            </v-btn>
+                          </div>
+                        </div>
+
+                        <div>
+                          <div class="text-caption text-medium-emphasis mb-2">Remaining Intervals</div>
+                          <v-table density="compact">
+                            <tbody>
+                              <tr v-for="interval in safeAnalysisIntervals" :key="`${interval.start_id}-${interval.end_id}`">
+                                <td>
+                                  <v-btn
+                                    size="x-small"
+                                    variant="text"
+                                    :color="activeBoundaryId === interval.start_id ? 'primary' : undefined"
+                                    @click="focusDetectedBoundary(interval.start_id)"
+                                  >
+                                    {{ interval.t0 }}
+                                  </v-btn>
+                                </td>
+                                <td>
+                                  <v-btn
+                                    size="x-small"
+                                    variant="text"
+                                    :color="activeBoundaryId === interval.end_id ? 'primary' : undefined"
+                                    @click="focusDetectedBoundary(interval.end_id)"
+                                  >
+                                    {{ interval.t1 }}
+                                  </v-btn>
+                                </td>
+                              </tr>
+                              <tr v-if="safeAnalysisIntervals.length === 0">
+                                <td colspan="2">No keep intervals detected.</td>
+                              </tr>
+                            </tbody>
+                          </v-table>
+                        </div>
+                      </div>
+                    </div>
+                  </v-card-text>
+                </v-card>
 
                 <v-table density="compact">
                   <thead>
@@ -684,6 +879,50 @@ async function reloadCurrentSection() {
   margin-bottom: 12px;
 }
 
+.analysis-card {
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.analysis-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.analysis-body {
+  display: grid;
+  gap: 12px;
+}
+
+.analysis-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.analysis-warnings {
+  display: grid;
+  gap: 4px;
+}
+
+.analysis-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr);
+  gap: 12px;
+}
+
+.analysis-boundaries {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.analysis-boundary-btn {
+  text-transform: none;
+}
+
 .worker-panel {
   display: grid;
   gap: 6px;
@@ -709,6 +948,10 @@ async function reloadCurrentSection() {
 
   .preview-frame {
     min-height: 360px;
+  }
+
+  .analysis-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

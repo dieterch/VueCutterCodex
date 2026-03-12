@@ -401,6 +401,46 @@ class Plexdata:
                 return { 'result': str(e) }
         else:
             raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
+
+    async def _analyze_recording(self, req):
+        if self.plex is None:
+            raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
+        section_name = req.get('section', self._selection['section'].title)
+        serie_name = req.get('serie')
+        season_name = req.get('season')
+        movie_name = req.get('movie_name') or req.get('movie') or self._selection['movie'].title
+        await self._update_section(section_name)
+        if serie_name:
+            await self._update_serie(serie_name)
+        if season_name:
+            await self._update_season(season_name)
+        m = await self._update_movie(movie_name)
+        self.cutter.ensure_media(m)
+        mm = self.plex.MovieData(m)
+        job = self.q.enqueue_call(self.cutter.analyze_recording, args=(mm,))
+        return {
+            'job_id': job.id,
+            'status': job.get_status(refresh=True),
+            'movie': m.title,
+        }
+
+    async def _analysis_status(self, job_id):
+        if self.plex is None:
+            raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
+        job = Job.fetch(job_id, connection=self.redis_connection)
+        status = job.get_status(refresh=True)
+        payload = {
+            'job_id': job.id,
+            'status': status,
+        }
+        if status == 'failed':
+            payload['error'] = job.exc_info.splitlines()[-1] if job.exc_info else 'Analysis failed.'
+            return payload
+        if status == 'finished':
+            payload['result'] = job.result
+            return payload
+        payload['movie'] = job.args[0].title if job.args else ''
+        return payload
         
     async def _doProgress(self):
         if self.plex is not None:

@@ -318,6 +318,25 @@ async def api_cut():
         return json_error(str(exc))
 
 
+@app.route("/api/analyze/recording", methods=['POST'])
+async def api_analyze_recording():
+    try:
+        req = await read_json_request()
+        return await plexdata._analyze_recording(req)
+    except FileNotFoundError as exc:
+        return json_error(str(exc), status=503)
+    except Exception as exc:
+        return json_error(str(exc))
+
+
+@app.route("/api/analyze/recording/<job_id>")
+async def api_analyze_recording_status(job_id):
+    try:
+        return await plexdata._analysis_status(job_id)
+    except Exception as exc:
+        return json_error(str(exc))
+
+
 @app.route("/api/progress")
 async def api_progress():
     try:
@@ -354,6 +373,7 @@ async def index():
             'frame': '/api/frame',
             'timeline': '/api/timeline',
             'cut': '/api/cut',
+            'analyze_recording': '/api/analyze/recording',
             'progress': '/api/progress',
         },
     }

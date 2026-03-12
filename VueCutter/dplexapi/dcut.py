@@ -4,6 +4,7 @@ import time
 import concurrent.futures
 import subprocess
 import shlex
+import re
 from pprint import pformat as pf
 
 class MediaUnavailableError(FileNotFoundError):
@@ -307,6 +308,286 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 			t1 = time.time()
 			print(f"\nIn aframe:{(t1-t0):5.2f} sec.")
 			return frame_name
+
+	def _run_ffmpeg_detection(self, movie, exc_lst):
+		self.ensure_media(movie)
+		completed = subprocess.run(
+			exc_lst,
+			stdout=subprocess.PIPE,
+			stderr=subprocess.PIPE,
+			text=True,
+			check=False
+		)
+		if completed.returncode != 0:
+			raise subprocess.CalledProcessError(
+				completed.returncode,
+				exc_lst,
+				output=completed.stdout,
+				stderr=completed.stderr
+			)
+		return f"{completed.stdout}\n{completed.stderr}"
+
+	def _parse_black_events(self, log_text):
+		pattern = re.compile(r"black_start:(?P<start>\d+(?:\.\d+)?)\s+black_end:(?P<end>\d+(?:\.\d+)?)\s+black_duration:(?P<duration>\d+(?:\.\d+)?)")
+		events = []
+		for match in pattern.finditer(log_text):
+			events.append({
+				'type': 'black',
+				'start': float(match.group('start')),
+				'end': float(match.group('end')),
+				'duration': float(match.group('duration')),
+			})
+		return events
+
+	def _parse_silence_events(self, log_text):
+		start_pattern = re.compile(r"silence_start:\s*(?P<start>\d+(?:\.\d+)?)")
+		end_pattern = re.compile(r"silence_end:\s*(?P<end>\d+(?:\.\d+)?)\s*\|\s*silence_duration:\s*(?P<duration>\d+(?:\.\d+)?)")
+		events = []
+		current_start = None
+		for line in log_text.splitlines():
+			start_match = start_pattern.search(line)
+			if start_match:
+				current_start = float(start_match.group('start'))
+				continue
+			end_match = end_pattern.search(line)
+			if end_match and current_start is not None:
+				events.append({
+					'type': 'silence',
+					'start': current_start,
+					'end': float(end_match.group('end')),
+					'duration': float(end_match.group('duration')),
+				})
+				current_start = None
+		return events
+
+	def _cluster_boundary_points(self, points, merge_window=6):
+		if not points:
+			return []
+		points = sorted(points, key=lambda point: point['time'])
+		clusters = []
+		current = None
+		for point in points:
+			if current is None or point['time'] - current['last_time'] > merge_window:
+				current = {
+					'weighted_time': point['time'] * point['weight'],
+					'total_weight': point['weight'],
+					'start_weight': point['weight'] if point['direction'] == 'start' else 0.0,
+					'end_weight': point['weight'] if point['direction'] == 'end' else 0.0,
+					'black_weight': point['weight'] if point['source'] == 'black' else 0.0,
+					'silence_weight': point['weight'] if point['source'] == 'silence' else 0.0,
+					'last_time': point['time'],
+				}
+				clusters.append(current)
+				continue
+			current['weighted_time'] += point['time'] * point['weight']
+			current['total_weight'] += point['weight']
+			current['last_time'] = point['time']
+			if point['direction'] == 'start':
+				current['start_weight'] += point['weight']
+			else:
+				current['end_weight'] += point['weight']
+			if point['source'] == 'black':
+				current['black_weight'] += point['weight']
+			else:
+				current['silence_weight'] += point['weight']
+		for index, cluster in enumerate(clusters):
+			cluster['time'] = cluster['weighted_time'] / cluster['total_weight']
+			cluster['score'] = round(cluster['total_weight'], 2)
+			cluster['id'] = f"cluster-{index}"
+		return clusters
+
+	def _cluster_points_from_events(self, black_events, silence_events):
+		points = []
+		for event in black_events:
+			weight = 1.3 if event['duration'] >= 0.4 else 1.0
+			points.append({'time': event['start'], 'direction': 'start', 'weight': weight, 'source': 'black'})
+			points.append({'time': event['end'], 'direction': 'end', 'weight': weight, 'source': 'black'})
+		for event in silence_events:
+			weight = 0.7 if event['duration'] >= 0.5 else 0.5
+			points.append({'time': event['start'], 'direction': 'start', 'weight': weight, 'source': 'silence'})
+			points.append({'time': event['end'], 'direction': 'end', 'weight': weight, 'source': 'silence'})
+		return self._cluster_boundary_points(points)
+
+	def _choose_content_start(self, clusters, duration_seconds):
+		window_end = min(max(duration_seconds * 0.45, 300), 1800)
+		candidates = [cluster for cluster in clusters if 15 <= cluster['time'] <= window_end and cluster['end_weight'] >= cluster['start_weight']]
+		if not candidates:
+			return None
+		return max(candidates, key=lambda cluster: (cluster['score'], -cluster['time']))
+
+	def _choose_content_end(self, clusters, duration_seconds):
+		window_start = max(duration_seconds * 0.55, duration_seconds - 1800, 0)
+		candidates = [cluster for cluster in clusters if window_start <= cluster['time'] <= max(duration_seconds - 15, 0) and cluster['start_weight'] >= cluster['end_weight']]
+		if not candidates:
+			return None
+		return max(candidates, key=lambda cluster: (cluster['score'], cluster['time']))
+
+	def _pair_ad_clusters(self, clusters, content_start, content_end):
+		internal = [
+			cluster for cluster in clusters
+			if content_start + 30 < cluster['time'] < content_end - 30 and cluster['score'] >= 1.0
+		]
+		pairs = []
+		index = 0
+		while index < len(internal):
+			start_cluster = internal[index]
+			if start_cluster['start_weight'] <= start_cluster['end_weight']:
+				index += 1
+				continue
+			match = None
+			for candidate_index in range(index + 1, len(internal)):
+				end_cluster = internal[candidate_index]
+				gap = end_cluster['time'] - start_cluster['time']
+				if gap < 30:
+					continue
+				if gap > 1200:
+					break
+				if end_cluster['end_weight'] >= end_cluster['start_weight']:
+					match = (candidate_index, end_cluster)
+					break
+			if match is None:
+				index += 1
+				continue
+			candidate_index, end_cluster = match
+			pairs.append((start_cluster, end_cluster))
+			index = candidate_index + 1
+		return pairs
+
+	def _derive_keep_intervals(self, boundaries):
+		warnings = []
+		start_boundary = next((boundary for boundary in boundaries if boundary['kind'] == 'content_start'), None)
+		end_boundary = next((boundary for boundary in boundaries if boundary['kind'] == 'content_end'), None)
+		if not start_boundary or not end_boundary:
+			return [], ['Unable to derive keep intervals because start/end detection is incomplete.']
+		start_seconds = self.str2pos(start_boundary['time'])
+		end_seconds = self.str2pos(end_boundary['time'])
+		if end_seconds <= start_seconds:
+			return [], ['Detected end is not after detected start.']
+		intervals = []
+		cursor_seconds = start_seconds
+		cursor_id = start_boundary['id']
+		ad_starts = sorted((boundary for boundary in boundaries if boundary['kind'] == 'ad_start'), key=lambda boundary: boundary['time'])
+		ad_ends = sorted((boundary for boundary in boundaries if boundary['kind'] == 'ad_end'), key=lambda boundary: boundary['time'])
+		pending_end_index = 0
+		for ad_start in ad_starts:
+			ad_start_seconds = self.str2pos(ad_start['time'])
+			if ad_start_seconds <= cursor_seconds or ad_start_seconds >= end_seconds:
+				continue
+			while pending_end_index < len(ad_ends) and self.str2pos(ad_ends[pending_end_index]['time']) <= ad_start_seconds:
+				pending_end_index += 1
+			if pending_end_index >= len(ad_ends):
+				warnings.append(f"Ad start at {ad_start['time']} has no matching ad end.")
+				break
+			ad_end = ad_ends[pending_end_index]
+			ad_end_seconds = self.str2pos(ad_end['time'])
+			if ad_end_seconds <= ad_start_seconds:
+				warnings.append(f"Ad end at {ad_end['time']} is not after ad start {ad_start['time']}.")
+				pending_end_index += 1
+				continue
+			if ad_start_seconds > cursor_seconds:
+				intervals.append({
+					't0': self.pos2str(cursor_seconds),
+					't1': ad_start['time'],
+					'start_id': cursor_id,
+					'end_id': ad_start['id'],
+				})
+			cursor_seconds = ad_end_seconds
+			cursor_id = ad_end['id']
+			pending_end_index += 1
+		if cursor_seconds < end_seconds:
+			intervals.append({
+				't0': self.pos2str(cursor_seconds),
+				't1': end_boundary['time'],
+				'start_id': cursor_id,
+				'end_id': end_boundary['id'],
+			})
+		intervals = [interval for interval in intervals if self.str2pos(interval['t1']) > self.str2pos(interval['t0'])]
+		if not intervals:
+			warnings.append('No remaining keep intervals could be derived from the detected boundaries.')
+		return intervals, warnings
+
+	def analyze_recording(self, movie):
+		t0 = time.time()
+		self.ensure_media(movie)
+		path = self._pathname(movie)
+		duration_seconds = max(int(movie.duration // 1000), 0)
+		warnings = []
+		black_log = self._run_ffmpeg_detection(movie, [
+			self._ffmpeg_binary,
+			'-hide_banner',
+			'-loglevel', 'info',
+			'-i', path,
+			'-vf', 'blackdetect=d=0.4:pic_th=0.98',
+			'-an',
+			'-f', 'null',
+			'-'
+		])
+		black_events = self._parse_black_events(black_log)
+		try:
+			silence_log = self._run_ffmpeg_detection(movie, [
+				self._ffmpeg_binary,
+				'-hide_banner',
+				'-loglevel', 'info',
+				'-i', path,
+				'-af', 'silencedetect=n=-35dB:d=0.5',
+				'-vn',
+				'-f', 'null',
+				'-'
+			])
+			silence_events = self._parse_silence_events(silence_log)
+		except subprocess.CalledProcessError:
+			silence_events = []
+			warnings.append('Audio silence detection was unavailable; using video-only boundary hints.')
+		clusters = self._cluster_points_from_events(black_events, silence_events)
+		start_cluster = self._choose_content_start(clusters, duration_seconds)
+		end_cluster = self._choose_content_end(clusters, duration_seconds)
+		boundaries = []
+		if start_cluster is None:
+			warnings.append('No confident content start detected; defaulting to recording start.')
+			boundaries.append({'id': 'content-start', 'kind': 'content_start', 'time': self.pos2str(0), 'confidence': 0.1})
+		else:
+			boundaries.append({
+				'id': 'content-start',
+				'kind': 'content_start',
+				'time': self.pos2str(int(start_cluster['time'])),
+				'confidence': round(min(start_cluster['score'] / 3.0, 1.0), 2),
+			})
+		if end_cluster is None:
+			warnings.append('No confident content end detected; defaulting to recording end.')
+			boundaries.append({'id': 'content-end', 'kind': 'content_end', 'time': self.pos2str(duration_seconds), 'confidence': 0.1})
+		else:
+			boundaries.append({
+				'id': 'content-end',
+				'kind': 'content_end',
+				'time': self.pos2str(int(end_cluster['time'])),
+				'confidence': round(min(end_cluster['score'] / 3.0, 1.0), 2),
+			})
+		content_start_seconds = self.str2pos(next(boundary['time'] for boundary in boundaries if boundary['kind'] == 'content_start'))
+		content_end_seconds = self.str2pos(next(boundary['time'] for boundary in boundaries if boundary['kind'] == 'content_end'))
+		for pair_index, (ad_start, ad_end) in enumerate(self._pair_ad_clusters(clusters, content_start_seconds, content_end_seconds)):
+			boundaries.append({
+				'id': f'ad-start-{pair_index}',
+				'kind': 'ad_start',
+				'time': self.pos2str(int(ad_start['time'])),
+				'confidence': round(min(ad_start['score'] / 3.0, 1.0), 2),
+			})
+			boundaries.append({
+				'id': f'ad-end-{pair_index}',
+				'kind': 'ad_end',
+				'time': self.pos2str(int(ad_end['time'])),
+				'confidence': round(min(ad_end['score'] / 3.0, 1.0), 2),
+			})
+		boundaries = sorted(boundaries, key=lambda boundary: self.str2pos(boundary['time']))
+		keep_intervals, interval_warnings = self._derive_keep_intervals(boundaries)
+		warnings.extend(interval_warnings)
+		return {
+			'movie': movie.title,
+			'duration': self.pos2str(duration_seconds),
+			'boundaries': boundaries,
+			'keep_intervals': keep_intervals,
+			'warnings': warnings,
+			'analysis_seconds': round(time.time() - t0, 2),
+		}
 
 	def _apsc(self,movie):
 		#check ob .ap und Datei existiert.
