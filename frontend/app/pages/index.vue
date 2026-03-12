@@ -28,6 +28,8 @@ const {
 } = useCutting()
 
 const durationSeconds = computed(() => Math.trunc((movieInfo.value?.duration_ms ?? 0) / 1000))
+const durationLabel = computed(() => (durationSeconds.value > 0 ? posToStr(durationSeconds.value) : '--:--:--'))
+const positionMinuteLabel = computed(() => `${Math.trunc(positionSeconds.value / 60)}'`)
 const safeTimelineItems = computed(() => timelineItems.value.filter((item) => item && item.label))
 const safeCutlist = computed(() => cutlist.value.filter((interval) => interval && interval.t0 && interval.t1))
 const mediaActionsDisabled = computed(() => frameLoading.value || !mediaAvailable.value)
@@ -48,7 +50,7 @@ const positionString = computed({
   },
 })
 
-const jumpButtons = [
+const leftJumpButtons = [
   { label: `-10'`, delta: -600 },
   { label: `-5'`, delta: -300 },
   { label: `-1'`, delta: -60 },
@@ -56,13 +58,16 @@ const jumpButtons = [
   { label: `-10"`, delta: -10 },
   { label: `-5"`, delta: -5 },
   { label: `-1"`, delta: -1 },
-  { label: `+1"`, delta: 1 },
-  { label: `+5"`, delta: 5 },
-  { label: `+10"`, delta: 10 },
-  { label: `+30"`, delta: 30 },
-  { label: `+1'`, delta: 60 },
-  { label: `+5'`, delta: 300 },
+]
+
+const rightJumpButtons = [
   { label: `+10'`, delta: 600 },
+  { label: `+5'`, delta: 300 },
+  { label: `+1'`, delta: 60 },
+  { label: `+30"`, delta: 30 },
+  { label: `+10"`, delta: 10 },
+  { label: `+5"`, delta: 5 },
+  { label: `+1"`, delta: 1 },
 ]
 
 async function refreshFrame() {
@@ -211,72 +216,70 @@ async function reloadCurrentSection() {
 <template>
   <v-app>
     <v-main>
-      <v-container class="py-8">
-        <v-row>
-          <v-col cols="12" lg="3">
-            <v-card rounded="xl" elevation="2">
-              <v-card-title>Selection</v-card-title>
-              <v-card-text>
-                <div class="d-flex justify-end mb-2">
-                  <v-btn size="small" variant="text" @click="reloadCurrentSection">
-                    Reload Section
-                  </v-btn>
-                </div>
+      <v-container fluid class="compact-shell pa-3">
+        <v-card rounded="lg" elevation="1" class="selection-bar">
+          <v-card-text class="pa-3">
+            <div class="selection-grid">
+              <div class="selection-field selection-field-section">
                 <v-select
                   :items="selection?.sections ?? []"
                   :model-value="selection?.section ?? null"
                   :loading="loading"
                   label="Section"
+                  density="compact"
+                  hide-details
                   @update:model-value="changeSection"
                 />
+              </div>
 
+              <div v-if="selection?.section_type === 'show'" class="selection-field selection-field-series">
                 <v-select
-                  v-if="selection?.section_type === 'show'"
                   :items="selection?.series ?? []"
                   :model-value="selection?.serie ?? null"
                   label="Series"
+                  density="compact"
+                  hide-details
                   @update:model-value="changeSeries"
                 />
+              </div>
 
+              <div v-if="selection?.section_type === 'show'" class="selection-field selection-field-season">
                 <v-select
-                  v-if="selection?.section_type === 'show'"
                   :items="selection?.seasons ?? []"
                   :model-value="selection?.season ?? null"
                   label="Season"
+                  density="compact"
+                  hide-details
                   @update:model-value="changeSeason"
                 />
+              </div>
 
+              <div class="selection-field selection-field-movie">
                 <v-select
                   :items="selection?.movies ?? []"
                   :model-value="selection?.movie ?? null"
                   label="Movie"
+                  density="compact"
+                  hide-details
                   @update:model-value="changeMovie"
                 />
-              </v-card-text>
-            </v-card>
-          </v-col>
+              </div>
 
-          <v-col cols="12" lg="3">
-            <v-card rounded="xl" elevation="2">
-              <v-card-title>Movie Info</v-card-title>
-              <v-card-text>
-                <div><strong>Title:</strong> {{ movieInfo?.title ?? '-' }}</div>
-                <div><strong>Year:</strong> {{ movieInfo?.year ?? '-' }}</div>
-                <div><strong>Duration:</strong> {{ movieInfo?.duration ?? '-' }} min</div>
-                <div class="mt-3 text-body-2">{{ movieInfo?.summary ?? '-' }}</div>
-              </v-card-text>
-            </v-card>
-          </v-col>
+              <v-btn size="small" variant="text" icon="mdi-reload" class="selection-reload" @click="reloadCurrentSection" />
+            </div>
+          </v-card-text>
+        </v-card>
 
-          <v-col cols="12" lg="6">
-            <v-card rounded="xl" elevation="2">
-              <v-card-title>Preview</v-card-title>
-              <v-card-text>
+        <v-row class="mt-2 preview-layout" dense>
+          <v-col class="preview-main">
+            <v-card rounded="lg" elevation="1" class="preview-card">
+              <v-card-text class="pa-3">
                 <v-alert
                   v-if="frameError"
                   type="warning"
                   variant="tonal"
-                  class="mb-4"
+                  density="compact"
+                  class="mb-2"
                   title="Media source unavailable"
                   :text="frameError"
                 />
@@ -285,86 +288,12 @@ async function reloadCurrentSection() {
                   v-else-if="!mediaAvailable"
                   type="info"
                   variant="tonal"
-                  class="mb-4"
+                  density="compact"
+                  class="mb-2"
                   text="The NAS or host media mount is unavailable. Frame preview is disabled until the media path exists."
                 />
 
-                <v-img
-                  v-if="frameUrl"
-                  :src="frameUrl"
-                  aspect-ratio="16/9"
-                  contain
-                  class="rounded-lg border preview-frame"
-                />
-
-                <v-skeleton-loader
-                  v-else-if="frameLoading"
-                  type="image"
-                  class="rounded-lg preview-frame"
-                />
-
-                <v-sheet
-                  v-else
-                  class="d-flex align-center justify-center rounded-lg border pa-8 text-medium-emphasis preview-frame"
-                >
-                  No preview loaded.
-                </v-sheet>
-
-                <div class="d-flex align-center mt-4">
-                  <v-text-field
-                    v-model="positionString"
-                    label="Position"
-                    hide-details
-                    density="comfortable"
-                  />
-                  <v-btn class="ml-2" color="primary" :loading="frameLoading" @click="refreshFrame">
-                    Load Frame
-                  </v-btn>
-                </div>
-
-                <div class="d-flex flex-wrap ga-2 mt-4">
-                  <v-btn
-                    v-for="button in jumpButtons"
-                    :key="button.label"
-                    size="small"
-                    variant="outlined"
-                    :disabled="mediaActionsDisabled"
-                    @click="jump(button.delta)"
-                  >
-                    <span :class="{ 'active-step': Math.abs(button.delta) === timelineRequest.step }">
-                      {{ button.label }}
-                    </span>
-                  </v-btn>
-                </div>
-
-                <div class="d-flex flex-wrap ga-2 mt-4">
-                  <v-btn size="small" variant="tonal" :disabled="mediaActionsDisabled" @click="jumpTo(0)">Start</v-btn>
-                  <v-btn
-                    size="small"
-                    variant="tonal"
-                    :disabled="mediaActionsDisabled"
-                    @click="jumpTo(Math.min(15 * 60, durationSeconds))"
-                  >
-                    +15'
-                  </v-btn>
-                  <v-btn
-                    size="small"
-                    variant="tonal"
-                    :disabled="mediaActionsDisabled"
-                    @click="jumpTo(Math.max(durationSeconds - 15 * 60, 0))"
-                  >
-                    -15'
-                  </v-btn>
-                  <v-btn size="small" variant="tonal" :disabled="mediaActionsDisabled" @click="jumpTo(durationSeconds)">End</v-btn>
-                  <v-btn size="small" color="primary" :disabled="!mediaAvailable && !timelineEnabled" @click="toggleTimeline">
-                    {{ timelineEnabled ? 'Hide Timeline' : 'Show Timeline' }}
-                  </v-btn>
-                  <v-btn size="small" :disabled="!timelineEnabled || mediaActionsDisabled" @click="pageTimeline(-1)">Page Left</v-btn>
-                  <v-btn size="small" :disabled="!timelineEnabled || mediaActionsDisabled" @click="pageTimeline(1)">Page Right</v-btn>
-                  <v-btn size="small" :disabled="!timelineEnabled || mediaActionsDisabled" @click="refreshTimeline">Refresh Timeline</v-btn>
-                </div>
-
-                <div v-if="timelineEnabled" class="timeline-strip mt-4">
+                <div v-if="timelineEnabled" class="timeline-strip mb-2">
                   <button
                     v-for="item in safeTimelineItems"
                     :key="`${item.label}-${item.pos}`"
@@ -376,38 +305,138 @@ async function reloadCurrentSection() {
                     <img :src="item.src" :alt="item.label" />
                   </button>
                 </div>
-              </v-card-text>
-            </v-card>
-          </v-col>
-        </v-row>
 
-        <v-row class="mt-2">
-          <v-col cols="12" lg="5">
-            <v-card rounded="xl" elevation="2">
-              <v-card-title>Cut Markers</v-card-title>
-              <v-card-text>
-                <div class="d-flex flex-wrap ga-2">
-                  <v-btn color="primary" :disabled="mediaActionsDisabled" @click="setCutStart">
-                    Start: {{ cutStart || '--:--:--' }}
+                <v-img
+                  v-if="frameUrl"
+                  :src="frameUrl"
+                  aspect-ratio="16/9"
+                  contain
+                  class="border preview-frame"
+                />
+
+                <v-skeleton-loader
+                  v-else-if="frameLoading"
+                  type="image"
+                  class="preview-frame"
+                />
+
+                <v-sheet
+                  v-else
+                  class="d-flex align-center justify-center border pa-6 text-medium-emphasis preview-frame"
+                >
+                  No preview loaded.
+                </v-sheet>
+
+                <div class="preview-toolbar mt-2">
+                  <v-chip size="small" variant="text" prepend-icon="mdi-movie-open">
+                    {{ durationLabel }} / {{ movieInfo?.duration ?? '-' }}'
+                  </v-chip>
+                  <v-chip size="small" variant="text" prepend-icon="mdi-movie-open-edit">
+                    {{ positionString }} / {{ positionMinuteLabel }}
+                  </v-chip>
+                  <v-text-field
+                    v-model="positionString"
+                    label="Position"
+                    hide-details
+                    density="compact"
+                    class="position-field"
+                  />
+                  <v-btn size="small" color="primary" :loading="frameLoading" @click="refreshFrame">
+                    Load Frame
                   </v-btn>
-                  <v-btn color="primary" :disabled="mediaActionsDisabled" @click="setCutEnd">
-                    End: {{ cutEnd || '--:--:--' }}
-                  </v-btn>
-                  <v-btn :disabled="!markersFormValid || mediaActionsDisabled" @click="addCurrentInterval">
-                    Add Interval
-                  </v-btn>
-                  <v-btn color="error" variant="tonal" @click="resetMarkers">
-                    Reset Markers
-                  </v-btn>
+                  <v-btn size="small" icon="mdi-arrow-left-bold-box-outline" :disabled="!timelineEnabled || mediaActionsDisabled" @click="pageTimeline(-1)" />
+                  <v-btn size="small" icon="mdi-filmstrip" color="primary" :disabled="!mediaAvailable && !timelineEnabled" @click="toggleTimeline" />
+                  <v-btn size="small" icon="mdi-arrow-right-bold-box-outline" :disabled="!timelineEnabled || mediaActionsDisabled" @click="pageTimeline(1)" />
+                  <v-btn size="small" icon="mdi-refresh" :disabled="!timelineEnabled || mediaActionsDisabled" @click="refreshTimeline" />
+                </div>
+
+                <div class="movie-meta mt-2">
+                  <div><strong>{{ movieInfo?.title ?? '-' }}</strong><span v-if="movieInfo?.year"> ({{ movieInfo.year }})</span></div>
+                  <div class="text-medium-emphasis">{{ movieInfo?.summary ?? '-' }}</div>
                 </div>
               </v-card-text>
             </v-card>
           </v-col>
 
-          <v-col cols="12" lg="7">
-            <v-card rounded="xl" elevation="2">
-              <v-card-title>Cutlist</v-card-title>
-              <v-card-text>
+          <v-col class="preview-sidebar">
+            <v-card rounded="lg" elevation="1" class="side-rail">
+              <v-card-text class="pa-2 rail-body">
+                <div class="rail-top-buttons">
+                  <v-btn size="small" color="primary" variant="tonal" class="rail-btn rail-top-btn" :disabled="mediaActionsDisabled" @click="jumpTo(0)">
+                    <v-icon size="16">mdi-format-horizontal-align-left</v-icon>
+                  </v-btn>
+                  <v-btn size="small" color="primary" variant="tonal" class="rail-btn rail-top-btn" :disabled="mediaActionsDisabled" @click="jumpTo(durationSeconds)">
+                    <v-icon size="16">mdi-format-horizontal-align-right</v-icon>
+                  </v-btn>
+                  <v-btn size="small" color="secondary" variant="tonal" class="rail-btn rail-top-btn" :disabled="mediaActionsDisabled" @click="jumpTo(Math.min(15 * 60, durationSeconds))">
+                    +15'
+                  </v-btn>
+                  <v-btn size="small" color="secondary" variant="tonal" class="rail-btn rail-top-btn" :disabled="mediaActionsDisabled" @click="jumpTo(Math.max(durationSeconds - 15 * 60, 0))">
+                    -15'
+                  </v-btn>
+                </div>
+                <div class="rail-columns">
+                  <div class="rail-column">
+                    <v-btn
+                      v-for="button in leftJumpButtons"
+                      :key="button.label"
+                      size="small"
+                      variant="tonal"
+                      class="rail-btn"
+                      :disabled="mediaActionsDisabled"
+                      @click="jump(button.delta)"
+                    >
+                      <span :class="{ 'active-step': Math.abs(button.delta) === timelineRequest.step }">
+                        {{ button.label }}
+                      </span>
+                    </v-btn>
+                  </div>
+                  <div class="rail-column">
+                    <v-btn
+                      v-for="button in rightJumpButtons"
+                      :key="button.label"
+                      size="small"
+                      variant="tonal"
+                      class="rail-btn"
+                      :disabled="mediaActionsDisabled"
+                      @click="jump(button.delta)"
+                    >
+                      <span :class="{ 'active-step': Math.abs(button.delta) === timelineRequest.step }">
+                        {{ button.label }}
+                      </span>
+                    </v-btn>
+                  </div>
+                </div>
+              </v-card-text>
+            </v-card>
+          </v-col>
+        </v-row>
+
+        <v-row class="mt-2" dense>
+          <v-col cols="12" lg="8">
+            <v-card rounded="lg" elevation="1">
+              <v-card-text class="pa-3">
+                <div class="cut-marker-row">
+                  <v-btn size="small" color="primary" :disabled="mediaActionsDisabled" @click="setCutStart">
+                    Start: {{ cutStart || '--:--:--' }}
+                  </v-btn>
+                  <v-btn size="small" color="primary" :disabled="mediaActionsDisabled" @click="setCutEnd">
+                    End: {{ cutEnd || '--:--:--' }}
+                  </v-btn>
+                  <v-btn size="small" :disabled="!markersFormValid || mediaActionsDisabled" @click="addCurrentInterval">
+                    Add Interval
+                  </v-btn>
+                  <v-btn size="small" color="primary" :disabled="!canOpenCutDialog" @click="openCutDialog">
+                    Open Cut Dialog
+                  </v-btn>
+                  <v-btn size="small" color="error" variant="tonal" @click="resetMarkers">
+                    Reset Markers
+                  </v-btn>
+                  <v-btn size="small" variant="tonal" color="error" @click="resetAll">
+                    Reset All
+                  </v-btn>
+                </div>
+
                 <v-table density="compact">
                   <thead>
                     <tr>
@@ -429,36 +458,28 @@ async function reloadCurrentSection() {
                     </tr>
                   </tbody>
                 </v-table>
-                <div class="d-flex flex-wrap ga-2 mt-4">
-                  <v-btn color="primary" :disabled="!canOpenCutDialog" @click="openCutDialog">
-                    Open Cut Dialog
-                  </v-btn>
-                  <v-btn variant="tonal" color="error" @click="resetAll">
-                    Reset All
-                  </v-btn>
-                </div>
                 <div v-if="timelineRequest.step !== 1" class="text-caption text-medium-emphasis mt-2">
                   Cut dialog is only enabled at 1" step resolution.
                 </div>
               </v-card-text>
             </v-card>
+          </v-col>
 
-            <v-card rounded="xl" elevation="2" class="mt-4">
-              <v-card-title>Worker Status</v-card-title>
-              <v-card-text>
+          <v-col cols="12" lg="4">
+            <v-card rounded="lg" elevation="1">
+              <v-card-text class="pa-3 worker-panel">
                 <div><strong>Status:</strong> {{ progress.status }}</div>
                 <div><strong>Title:</strong> {{ progress.title }}</div>
                 <div><strong>Cut:</strong> {{ progress.cut_progress }}%</div>
-                <div><strong>APSC:</strong> {{ progress.apsc_progress }}%</div>
                 <div><strong>Polling:</strong> {{ polling ? 'active' : 'idle' }}</div>
-                <v-btn class="mt-4" color="primary" @click="refreshProgress">Refresh Progress</v-btn>
+                <v-btn class="mt-2" size="small" color="primary" @click="refreshProgress">Refresh Progress</v-btn>
               </v-card-text>
             </v-card>
           </v-col>
         </v-row>
 
         <v-dialog v-model="dialogOpen" max-width="720">
-          <v-card rounded="xl">
+          <v-card rounded="lg">
             <v-card-title>Cut Dialog</v-card-title>
             <v-card-text>
               <v-alert
@@ -504,11 +525,97 @@ async function reloadCurrentSection() {
 </template>
 
 <style scoped>
+.compact-shell {
+  max-width: 1800px;
+}
+
+.selection-bar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.selection-grid {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.selection-field {
+  min-width: 0;
+}
+
+.selection-field-section {
+  flex: 0 1 220px;
+}
+
+.selection-field-series {
+  flex: 1 1 240px;
+}
+
+.selection-field-season {
+  flex: 0 1 140px;
+}
+
+.selection-field-movie {
+  flex: 2 1 360px;
+}
+
+.selection-reload {
+  flex: 0 0 auto;
+}
+
+.preview-card,
+.side-rail {
+  height: 100%;
+}
+
+.rail-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.preview-layout {
+  flex-wrap: nowrap;
+  align-items: stretch;
+}
+
+.preview-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.preview-sidebar {
+  flex: 0 0 142px;
+  max-width: 142px;
+}
+
+.preview-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.position-field {
+  max-width: 150px;
+}
+
+.movie-meta {
+  display: grid;
+  gap: 4px;
+  font-size: 0.9rem;
+}
+
 .timeline-strip {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
   gap: 0;
   overflow: hidden;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
 
 .timeline-item {
@@ -532,18 +639,71 @@ async function reloadCurrentSection() {
   display: block;
 }
 
-.preview-frame {
-  min-height: 420px;
+.rail-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  justify-items: center;
+  width: max-content;
 }
 
-@media (min-width: 1400px) {
-  .preview-frame {
-    min-height: 520px;
-  }
+.rail-top-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-bottom: 6px;
+  justify-items: center;
+  width: max-content;
+}
+
+.rail-column {
+  display: grid;
+  gap: 4px;
+}
+
+.rail-btn {
+  min-width: 60px;
+  width: 60px;
+  padding-inline: 4px;
+  letter-spacing: 0;
+}
+
+.rail-top-btn {
+  min-height: 28px;
+}
+
+.cut-marker-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.worker-panel {
+  display: grid;
+  gap: 6px;
+}
+
+.preview-frame {
+  min-height: 520px;
 }
 
 .active-step {
   text-decoration: underline;
   text-underline-offset: 0.2em;
+}
+
+@media (max-width: 1280px) {
+  .selection-grid {
+    flex-wrap: wrap;
+  }
+
+  .selection-reload {
+    order: 99;
+  }
+
+  .preview-frame {
+    min-height: 360px;
+  }
 }
 </style>
