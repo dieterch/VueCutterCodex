@@ -377,22 +377,21 @@ class Plexdata:
             movie_name = req['movie_name']
             cutlist = req['cutlist']
             inplace = req['inplace']
-            useffmpeg= req['useffmpeg']
             s = await self._update_section(section_name)
             m = await self._update_movie(movie_name)
             self.cutter.ensure_media(m)
-            res = f"Queue Cut From section '{s}', cut '{m.title}', cutlist{cutlist}, inplace={inplace}, useffmpeg={useffmpeg}"
+            res = f"Queue Cut From section '{s}', cut '{m.title}', cutlist{cutlist}, inplace={inplace}, engine=ffmpeg"
             try:
                 mm = self.plex.MovieData(m)
                 print("will cut now:\n",res)
-                job = self.q.enqueue_call(self.cutter.cut, args=(mm,cutlist,inplace,useffmpeg))
+                job = self.q.enqueue_call(self.cutter.cut, args=(mm,cutlist,inplace))
                 res = {
                     'Section': s.title,
                     'Duration Raw': mm.duration // 60000,
                     'Duration Cut': sum([self.cutter.cutlength(cut['t0'],cut['t1']) for cut in cutlist]),
                     'Cutlist': cutlist,
                     'Inplace': inplace,
-                    'useFFMPEG': useffmpeg,
+                    'Engine': 'ffmpeg',
                     '.ap .sc Files': self.cutter._apsc(m),
                     'cut File': self.cutter._cutfile(m)
                 }

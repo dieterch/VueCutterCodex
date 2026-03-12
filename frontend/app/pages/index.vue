@@ -16,7 +16,6 @@ const {
   cutlist,
   dialogOpen,
   inplace,
-  useffmpeg,
   cutInfo,
   submitting,
   submissionError,
@@ -507,7 +506,6 @@ async function reloadCurrentSection() {
                 </tbody>
               </v-table>
               <div class="d-flex ga-4 mt-4">
-                <v-checkbox v-model="useffmpeg" label="FFMPEG" hide-details />
                 <v-checkbox v-model="inplace" label="Inplace" hide-details />
               </div>
             </v-card-text>

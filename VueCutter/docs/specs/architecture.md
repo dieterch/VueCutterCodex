@@ -29,7 +29,7 @@ Sie besteht aus vier klar getrennten Schichten:
    v                         v
 [PlexInterface]        [CutterInterface]
    |                         |
-[Plex Server]        [SMB / ffmpeg / mcut]
+[Plex Server]        [SMB / ffmpeg]
 ```
 
 ---
@@ -149,7 +149,7 @@ Dateisystem‑naher Ausführungscontroller für Video‑Schnitt.
 
 ### Verantwortlichkeiten
 - SMB‑Mount / Umount
-- ffmpeg / mcut Aufrufe
+- ffmpeg Aufrufe
 - Timeline‑Frames
 - Progress‑Berechnung
 
@@ -230,4 +230,3 @@ Seine Stärke ist:
 Diese Architektur ist kein Zufall, sondern Ergebnis der Anforderungen.
 
 Alles Weitere baut **darauf** auf.
-

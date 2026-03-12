@@ -1,9 +1,7 @@
 
 
 # if inplace:
-#     nexc_lst = ["self._mcut_binary","-r","-n",f"'{movie.title}'","-d", f"'{movie.summary}'",f"{self._pathname(movie)}","-c"]
 # else:
-#     nexc_lst = ["self._mcut_binary","-n",f"'{movie.title}'","-d", f"'{movie.summary}'",f"{self._pathname(movie)}","-c"]
 
 # for cut in cutlist:
 #     for key, value in cut.items():

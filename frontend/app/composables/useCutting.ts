@@ -21,7 +21,6 @@ export function useCutting() {
   const cutlist = useState<CutInterval[]>('cutlist', () => [])
   const dialogOpen = useState('cutDialogOpen', () => false)
   const inplace = useState('cutInplace', () => true)
-  const useffmpeg = useState('cutUseffmpeg', () => true)
   const cutInfo = useState<CutInfo | null>('cutInfo', () => null)
   const submitting = useState('cutSubmitting', () => false)
   const submissionError = useState('cutSubmissionError', () => '')
@@ -88,7 +87,6 @@ export function useCutting() {
           movie_name: movie,
           cutlist: cutlist.value,
           inplace: inplace.value,
-          useffmpeg: useffmpeg.value,
           etaest: cutInfo.value?.eta ?? 0,
         },
       })
@@ -111,7 +109,6 @@ export function useCutting() {
     submitting.value = false
     submissionError.value = ''
     inplace.value = true
-    useffmpeg.value = true
   }
 
   return {
@@ -120,7 +117,6 @@ export function useCutting() {
     cutlist,
     dialogOpen,
     inplace,
-    useffmpeg,
     cutInfo,
     submitting,
     submissionError,

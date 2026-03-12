@@ -30,8 +30,6 @@ Dieser Zustand beeinflusst:
 - SMB Server
 - /etc/smbcredentials
 - ffmpeg (Systembinary)
-- mcut Binary
-- reconstruct_apsc Binary
 - Lokales Mount-Verzeichnis: dplexapi/mnt/
 
 ## Mounting
@@ -91,16 +89,12 @@ aframe():
 ```md
 ## Schneiden – Ablauf
 
-cut(movie, cutlist, inplace, useffmpeg):
+cut(movie, cutlist, inplace):
 
 1. Mount Movie
 2. Entferne alte Cut-Dateien (falls vorhanden)
-3. Falls useffmpeg:
-   - ffmpegsplit
-   - ffmpegjoin
-4. Sonst (mcut):
-   - ggf. reconstruct_apsc
-   - mcut
+3. ffmpegsplit
+4. ffmpegjoin
 5. Cleanup bei inplace
 6. Entferne Timeline-Dateien
 7. Liefere Ergebnis-Metadaten
@@ -111,12 +105,11 @@ _movie_stats:
 - berechnet Fortschritt über Dateigrößen
 - berücksichtigt:
   - inplace
-  - useffmpeg
   - part*.ts
 
 _apsc_stats:
 - Fortschritt der .ap-Datei
-- bei ffmpeg immer 100%
+- immer 100%
 
 
 ---
@@ -137,7 +130,7 @@ _apsc_stats:
 2. Kein paralleles Schneiden mehrerer Movies
 3. Dateisystem ist konsistent
 4. SMB Mount ist stabil
-5. ffmpeg/mcut liefern korrekte Exit-Codes
+5. ffmpeg liefert korrekte Exit-Codes
 6. Movie.locations enthält genau einen Pfad
 
 ## Integration

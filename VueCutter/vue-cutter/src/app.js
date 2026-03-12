@@ -181,7 +181,6 @@ export const cutterdialog_enable_cut = ref(false)
 export const cutlist = ref([])
 export const lmovie_cut_info = ref({})
 export const cutmsg = ref('')
-export const useffmpeg = ref(true)
 
 // btn click function for all cutting/position related buttons
 export const hpos = (b) => {

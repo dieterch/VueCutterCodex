@@ -14,8 +14,6 @@ class MediaUnavailableError(FileNotFoundError):
 class CutterInterface:
 	def __init__(self, server):
 		self._server = server
-		self._mcut_binary = os.path.dirname(__file__) + '/bin/mcut'
-		self._reconstruct_apsc_binary = os.path.dirname(__file__) + '/bin/reconstruct_apsc'
 		self._ffmpeg_binary = '/usr/bin/ffmpeg'
 		self._media_root = os.getenv('VUECUTTER_MEDIA_ROOT', '').rstrip('/')
 		self._media_keep_share = os.getenv('VUECUTTER_MEDIA_KEEP_SHARE', 'true').lower() != 'false'
@@ -109,7 +107,7 @@ class CutterInterface:
 		"""
 		return self._foldername(movie) + self._tempfilename(movie)
 
-	def _movie_stats(self, movie, cutlist, inplace=False, useffmpeg=False):
+	def _movie_stats(self, movie, cutlist, inplace=False):
 		"""
 		return TS Progress in percent 
 		"""
@@ -125,15 +123,14 @@ class CutterInterface:
 			moviesize = os.path.getsize(self._pathname(movie))
 			targetsize = faktor * moviesize
 			#targetfile = self._cutname(movie) if not inplace else self._tempname(movie)
-			if useffmpeg:
-				# first calculate the size of all parts
-				actualsize = sum([os.path.getsize(f"{self._foldername(movie)}part{i}.ts") for i in range(len(cutlist))])
-				if len(cutlist) > 1:
-					# add the size of the target file to actualsize
-					if os.path.exists(targetname):
-						actualsize += os.path.getsize(targetname)
-					targetsize = 2 * targetsize # parts and target file
-			else:
+			# first calculate the size of all parts
+			actualsize = sum([os.path.getsize(f"{self._foldername(movie)}part{i}.ts") for i in range(len(cutlist))])
+			if len(cutlist) > 1:
+				# add the size of the target file to actualsize
+				if os.path.exists(targetname):
+					actualsize += os.path.getsize(targetname)
+				targetsize = 2 * targetsize # parts and target file
+			elif os.path.exists(targetname):
 				actualsize = os.path.getsize(targetname)
 		except FileNotFoundError as e:
 			print(str(e))
@@ -143,33 +140,11 @@ class CutterInterface:
 		progress = int(progress * 100) if progress < 1.0 else 100
 		return progress
 
-	def _apsc_stats(self, movie, cutlist, inplace=False, useffmpeg=False):
+	def _apsc_stats(self, movie, cutlist, inplace=False):
 		"""
 		return AP Progress in percent 
 		"""
-		# ffmpeg cut does not need .ap .sc files
-		if useffmpeg:
-			return 100
-		else:
-			self.ensure_media(movie)
-			cl = sum([self.cutlength(cut['t0'],cut['t1']) for cut in cutlist])
-			ml = (movie.duration / 60000)
-			faktor = cl/ml
-			moviesize = os.path.getsize(self._pathname(movie))
-			targetsize = faktor * moviesize * 0.064 / 1000
-			#print(f"moviesize: {moviesize} targetsize: {targetsize:.0f} faktor: {faktor:.4f} cl: {cl} ml: {ml:.1f}")
-			if inplace:
-				if os.path.exists(self._pathname(movie)+'.ap'):
-					progress = os.path.getsize(self._pathname(movie)+'.ap')/targetsize
-				else:
-					progress = 0
-			else:
-				if os.path.exists(self._cutname(movie)+'.ap'):
-					progress = os.path.getsize(self._cutname(movie)+'.ap')/targetsize
-				else:
-					progress = 0
-			progress = int(progress * 100) if progress < 1.0 else 100
-			return progress
+		return 100
 
 	def mount(self, movie):
 		if self._media_root:
@@ -361,37 +336,6 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 			pass
 			#self.umount()
 
-	def _reconstruct_apsc(self, movie):
-		print()
-		print(f"'{self._filename(movie)}', *.ap und *.sp Files werden rekonstruiert.")
-		exc_lst = [self._reconstruct_apsc_binary,self._pathname(movie)]
-		try:
-			res = subprocess.check_output(exc_lst)
-			res = res.decode('utf-8')
-			return res
-		except subprocess.CalledProcessError as e:
-			raise e
-		finally:
-			print(f"'{self._filename(movie)}', *.ap und *.sp Files wurden rekonstruiert.")
-
-	def _mcut(self, movie, cutlist, inplace = False):
-		print()
-		print(f"'{self._filename(movie)}' wird geschnitten. -]+{cutlist}+[- ")
-  
-		nexc_lst = [self._mcut_binary,"-n",f"'{movie.title}'","-d", f"'{movie.summary}'",f"{self._pathname(movie)}","-c"] + [v for c in cutlist for v in c.values()]
-		if inplace:
-			nexc_lst.insert(1,'-r')
-		try:
-			print("---------------------------------")
-			print(f"nexc_lst: {nexc_lst}")
-			print("---------------------------------")
-			res = subprocess.check_output(nexc_lst)
-			res = res.decode('utf-8')
-			print(f"'{self._filename(movie)}' wurde geschnitten.")
-			return res
-		except subprocess.CalledProcessError as e:
-			raise e
-
 	def _ffmpegjoin(self, movie, cutlist, inplace = False):
         # if there is only one part, just rename it to the target file otherwise join the parts
 		if inplace:
@@ -454,14 +398,14 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 		except subprocess.CalledProcessError as e:
 			raise e
 
-	def cut(self, movie, cutlist, inplace=False, useffmpeg=False):
+	def cut(self, movie, cutlist, inplace=False):
 		t0 = time.time()
 		t1 = time.time() #initialize t1, in case no first run applies (e.g.) .ap files already exist ...
 		restxt = 'cut started ... \n'
 		resdict = {
 			'name': movie.title,
 			'inplace': inplace,
-			'useffmpeg': useffmpeg
+			'engine': 'ffmpeg'
 		}
 		self.ensure_media(movie)
 		#check ob .ap und .sc Dateien existieren, wenn nicht, erzeugen
@@ -483,55 +427,25 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 				print(str(e))
 
 
-		if useffmpeg:
-			# use FFMPEG for cutting
-			try:
-				t1=time.time()
-				res = self._ffmpegsplit(movie,cutlist,inplace)
-				print("---------------------------------")
-				print("FFMPEG split Result: ", res)
-				print("---------------------------------")
-				restxt += f"Result FFMpeg Spit: {res}\n"
-				restxt += f"Split Time: {(t1 - t0):7.0f} sec.\n\n"
-				resdict.update({
-						'FFSplitTime': (t1-t0)
-				})
-				res2 = self._ffmpegjoin(movie,cutlist,inplace)
-				print("---------------------------------")
-				print("FFMPEG join Result: ", res2)
-				print("---------------------------------")
-				t2 = time.time()
-				restxt += f"Ergebnis FFMPEG Join: {res2}\n"
-			except subprocess.CalledProcessError as e:
-				raise e
-
-		else:
-			# use MCUT for cutting
-			# check if mcut assistence files (.ap, .sc) exist, if not (check for .ap is enough ...), reconstruct them.
-			if not os.path.exists(self._pathname(movie)+'.ap'):
-				try:
-					res = self._reconstruct_apsc(movie)
-					print("---------------------------------")
-					print("mcut Reconstruct Result: ", res)
-					print("---------------------------------")
-					t1 = time.time()
-					restxt += f"Result Reconstruct: {res}\n"
-					restxt += f"ReSt Time: {(t1 - t0):7.0f} sec.\n\n"
-					resdict.update({
-						'RestApTime': (t1-t0)
-					})
-				except subprocess.CalledProcessError as e:
-					raise e
-			
-			try:
-				res2 = self._mcut(movie,cutlist,inplace)
-				print("---------------------------------")
-				print("MCUT Result: ", res2)
-				print("---------------------------------")
-				t2 = time.time()
-				restxt += f"Ergebnis MCUT: {res2}\n"
-			except subprocess.CalledProcessError as e:
-				raise e
+		try:
+			t1=time.time()
+			res = self._ffmpegsplit(movie,cutlist,inplace)
+			print("---------------------------------")
+			print("FFMPEG split Result: ", res)
+			print("---------------------------------")
+			restxt += f"Result FFMpeg Spit: {res}\n"
+			restxt += f"Split Time: {(t1 - t0):7.0f} sec.\n\n"
+			resdict.update({
+					'FFSplitTime': (t1-t0)
+			})
+			res2 = self._ffmpegjoin(movie,cutlist,inplace)
+			print("---------------------------------")
+			print("FFMPEG join Result: ", res2)
+			print("---------------------------------")
+			t2 = time.time()
+			restxt += f"Ergebnis FFMPEG Join: {res2}\n"
+		except subprocess.CalledProcessError as e:
+			raise e
 
 		if ((inplace == True) and (os.path.exists(self._cutname(movie)))):
 			try:

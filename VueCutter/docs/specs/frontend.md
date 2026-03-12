@@ -89,7 +89,7 @@ ltimeline:
 - t0 / t1 (Cut-Grenzen)
 - cutlist
 - inplace
-- useffmpeg
+- ffmpeg-only cut execution
 - cutterdialog
 
 b.type:

@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import axios from 'axios';
 import {
     host, protocol,
-    inplace, useffmpeg, lmovie, movie, section,
+    inplace, lmovie, movie, section,
     t0, t1, lmovie_cut_info,
     cutterdialog, cutterdialog_enable_cut, 
     reset_cutlist, cutlist, cutmsg, progress_status
@@ -18,7 +18,6 @@ async function do_cut() {
             "movie_name": lmovie.value,
             "cutlist": cutlist.value,
             "inplace": inplace.value,
-            "useffmpeg": useffmpeg.value,
             "etaest": lmovie_cut_info.value.eta
         },
         { headers: { 'Content-type': 'application/json',}});
@@ -81,14 +80,6 @@ function progress() {
                             <td>{{ key }}</td>
                             <td>{{ val }}</td>
                         </tr>
-                        <tr v-if = "!useffmpeg">
-                            <td>.ap .sc Files ?</td>
-                            <td>{{ lmovie_cut_info.apsc }}</td>
-                        </tr>
-                        <tr v-if = "!useffmpeg">
-                            <td>_cut File ?</td>
-                            <td>{{ lmovie_cut_info.cutfile }}</td>
-                        </tr>
                 </tbody>
             </v-table>
         </v-card-text>
@@ -100,12 +91,6 @@ function progress() {
                     <v-sheet
                         class="d-flex justify-end bg-toolsbackground"
                         height="35">
-                        <v-checkbox
-                            density="dense"
-                            class="ma-2"
-                            v-model="useffmpeg"
-                            label="FFMPEG"
-                        ></v-checkbox>
                         <v-checkbox
                             density="dense"
                             class="ma-2"
