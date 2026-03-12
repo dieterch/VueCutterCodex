@@ -445,10 +445,51 @@ class Plexdata:
             payload['error'] = job.exc_info.splitlines()[-1] if job.exc_info else 'Analysis failed.'
             return payload
         if status == 'finished':
+            if isinstance(job.result, dict) and job.result.get('cancelled'):
+                payload['status'] = 'cancelled'
             payload['result'] = job.result
+            return payload
+        if status == 'canceled':
+            payload['status'] = 'cancelled'
             return payload
         payload['movie'] = job.args[0].title if job.args else ''
         return payload
+
+    async def _cancel_analysis(self, job_id):
+        if self.plex is None:
+            raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
+        job = Job.fetch(job_id, connection=self.redis_connection)
+        status = job.get_status(refresh=True)
+        analysis_meta = job.meta.get('analysis', {}) if hasattr(job, 'meta') else {}
+        movie_title = analysis_meta.get('movie') or (job.args[0].title if job.args else '')
+        if status in ('finished', 'failed', 'canceled'):
+            return {
+                'job_id': job.id,
+                'status': 'cancelled' if status == 'canceled' else status,
+                'movie': movie_title,
+            }
+        if status == 'queued':
+            job.cancel()
+            return {
+                'job_id': job.id,
+                'status': 'cancelled',
+                'movie': movie_title,
+            }
+        job.meta['analysis'] = {
+            **analysis_meta,
+            'phase': 'cancelling',
+            'percent': analysis_meta.get('percent', 0),
+            'movie': movie_title,
+            'cancellable': False,
+            'cancel_requested': True,
+        }
+        job.save_meta()
+        return {
+            'job_id': job.id,
+            'status': 'cancelling',
+            'movie': movie_title,
+            'progress': job.meta['analysis'],
+        }
         
     async def _doProgress(self):
         if self.plex is not None:

@@ -21,6 +21,7 @@ type AnalysisResult = {
   keep_intervals: AnalysisKeepInterval[]
   warnings: string[]
   analysis_seconds: number
+  cancelled?: boolean
 }
 
 type AnalysisStatusResponse = {
@@ -190,7 +191,7 @@ export function useAnalysis() {
     }
     const response = await apiFetch<AnalysisStatusResponse>(`/api/analyze/recording/${jobId.value}`)
     applyStatusResponse(response)
-    if (response.status === 'finished' || response.status === 'failed') {
+    if (response.status === 'finished' || response.status === 'failed' || response.status === 'cancelled') {
       stopPolling()
     }
   }
@@ -222,6 +223,19 @@ export function useAnalysis() {
     }
     running.value = true
     startPolling()
+  }
+
+  async function cancel() {
+    if (!jobId.value || !running.value) {
+      return
+    }
+    const response = await apiFetch<AnalysisStatusResponse>(`/api/analyze/recording/${jobId.value}/cancel`, {
+      method: 'POST',
+    })
+    applyStatusResponse(response)
+    if (response.status === 'cancelled') {
+      stopPolling()
+    }
   }
 
   function selectBoundary(boundaryId: string) {
@@ -272,6 +286,7 @@ export function useAnalysis() {
     activeBoundaryId,
     activeBoundary,
     start,
+    cancel,
     reset,
     refreshStatus,
     selectBoundary,

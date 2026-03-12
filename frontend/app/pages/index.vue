@@ -35,6 +35,7 @@ const {
   activeBoundaryId,
   activeBoundary,
   start: startAnalysis,
+  cancel: cancelAnalysis,
   reset: resetAnalysis,
   selectBoundary,
   setActiveBoundaryTime,
@@ -553,6 +554,16 @@ async function reloadCurrentSection() {
                     </div>
 
                     <div v-if="analysisRunning && !analysisDraft" class="analysis-body">
+                      <div class="analysis-actions">
+                        <v-btn
+                          size="small"
+                          color="error"
+                          variant="tonal"
+                          @click="cancelAnalysis"
+                        >
+                          Cancel Analysis
+                        </v-btn>
+                      </div>
                       <v-progress-linear
                         :model-value="analysisProgress.percent"
                         color="primary"

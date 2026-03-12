@@ -337,6 +337,14 @@ async def api_analyze_recording_status(job_id):
         return json_error(str(exc))
 
 
+@app.route("/api/analyze/recording/<job_id>/cancel", methods=['POST'])
+async def api_cancel_analyze_recording(job_id):
+    try:
+        return await plexdata._cancel_analysis(job_id)
+    except Exception as exc:
+        return json_error(str(exc))
+
+
 @app.route("/api/progress")
 async def api_progress():
     try:

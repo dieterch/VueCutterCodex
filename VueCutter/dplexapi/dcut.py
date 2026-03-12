@@ -6,6 +6,7 @@ import subprocess
 import shlex
 import re
 import selectors
+import signal
 from pprint import pformat as pf
 from rq import get_current_job
 
@@ -13,6 +14,9 @@ class MediaUnavailableError(FileNotFoundError):
 	def __init__(self, path):
 		super().__init__(f"Media source unavailable: '{path}' is missing. Ensure the NAS is online and the host media path is mounted.")
 		self.path = path
+
+class AnalysisCancelledError(RuntimeError):
+	pass
 
 class CutterInterface:
 	def __init__(self, server):
@@ -315,13 +319,56 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 		job = get_current_job()
 		if job is None:
 			return
+		current = job.meta.get('analysis', {})
 		job.meta['analysis'] = {
 			'phase': phase,
 			'percent': max(0, min(int(percent), 100)),
 			'movie': movie_title,
 			'cancellable': cancellable,
+			'cancel_requested': current.get('cancel_requested', False),
 		}
 		job.save_meta()
+
+	def _request_analysis_cancel(self, phase='cancelling', percent=None, movie_title=""):
+		job = get_current_job()
+		if job is None:
+			return
+		current = job.meta.get('analysis', {})
+		job.meta['analysis'] = {
+			'phase': phase,
+			'percent': current.get('percent', 0) if percent is None else max(0, min(int(percent), 100)),
+			'movie': movie_title or current.get('movie', ''),
+			'cancellable': False,
+			'cancel_requested': True,
+		}
+		job.save_meta()
+
+	def _cancel_requested(self, last_check, minimum_interval=1.0):
+		job = get_current_job()
+		now = time.time()
+		if job is None:
+			return False, now
+		if now - last_check < minimum_interval:
+			return False, last_check
+		job.refresh()
+		requested = bool(job.meta.get('analysis', {}).get('cancel_requested'))
+		return requested, now
+
+	def _terminate_process(self, process):
+		try:
+			os.killpg(process.pid, signal.SIGTERM)
+		except ProcessLookupError:
+			return
+		except Exception:
+			process.terminate()
+		try:
+			process.wait(timeout=5)
+		except subprocess.TimeoutExpired:
+			try:
+				os.killpg(process.pid, signal.SIGKILL)
+			except Exception:
+				process.kill()
+			process.wait(timeout=5)
 
 	def _progress_seconds_from_line(self, line):
 		if line.startswith('out_time_ms='):
@@ -344,6 +391,7 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 			stderr=subprocess.PIPE,
 			text=True,
 			bufsize=1,
+			start_new_session=True,
 		)
 		selector = selectors.DefaultSelector()
 		if process.stdout:
@@ -353,8 +401,15 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 		stdout_chunks = []
 		stderr_chunks = []
 		last_percent = phase_start_percent
+		last_cancel_check = 0.0
 		self._set_analysis_progress(phase, phase_start_percent, movie.title, cancellable=False)
 		while selector.get_map():
+			cancel_requested, last_cancel_check = self._cancel_requested(last_cancel_check)
+			if cancel_requested:
+				self._request_analysis_cancel(movie_title=movie.title)
+				self._terminate_process(process)
+				selector.close()
+				raise AnalysisCancelledError(f'Analysis cancelled for {movie.title}.')
 			for key, _ in selector.select(timeout=0.5):
 				line = key.fileobj.readline()
 				if not line:
@@ -569,37 +624,49 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 		path = self._pathname(movie)
 		duration_seconds = max(int(movie.duration // 1000), 0)
 		warnings = []
-		self._set_analysis_progress('starting', 0, movie.title, cancellable=False)
-		black_log = self._run_ffmpeg_detection(movie, [
-			self._ffmpeg_binary,
-			'-hide_banner',
-			'-loglevel', 'info',
-			'-nostats',
-			'-progress', 'pipe:1',
-			'-i', path,
-			'-vf', 'blackdetect=d=0.4:pic_th=0.98',
-			'-an',
-			'-f', 'null',
-			'-'
-		], 'blackdetect', 0, 50, duration_seconds)
-		black_events = self._parse_black_events(black_log)
+		self._set_analysis_progress('starting', 0, movie.title, cancellable=True)
 		try:
-			silence_log = self._run_ffmpeg_detection(movie, [
+			black_log = self._run_ffmpeg_detection(movie, [
 				self._ffmpeg_binary,
 				'-hide_banner',
 				'-loglevel', 'info',
 				'-nostats',
 				'-progress', 'pipe:1',
 				'-i', path,
-				'-af', 'silencedetect=n=-35dB:d=0.5',
-				'-vn',
+				'-vf', 'blackdetect=d=0.4:pic_th=0.98',
+				'-an',
 				'-f', 'null',
 				'-'
-			], 'silencedetect', 50, 100, duration_seconds)
-			silence_events = self._parse_silence_events(silence_log)
-		except subprocess.CalledProcessError:
-			silence_events = []
-			warnings.append('Audio silence detection was unavailable; using video-only boundary hints.')
+			], 'blackdetect', 0, 50, duration_seconds)
+			black_events = self._parse_black_events(black_log)
+			try:
+				silence_log = self._run_ffmpeg_detection(movie, [
+					self._ffmpeg_binary,
+					'-hide_banner',
+					'-loglevel', 'info',
+					'-nostats',
+					'-progress', 'pipe:1',
+					'-i', path,
+					'-af', 'silencedetect=n=-35dB:d=0.5',
+					'-vn',
+					'-f', 'null',
+					'-'
+				], 'silencedetect', 50, 100, duration_seconds)
+				silence_events = self._parse_silence_events(silence_log)
+			except subprocess.CalledProcessError:
+				silence_events = []
+				warnings.append('Audio silence detection was unavailable; using video-only boundary hints.')
+		except AnalysisCancelledError:
+			self._request_analysis_cancel(phase='cancelled', percent=0, movie_title=movie.title)
+			return {
+				'movie': movie.title,
+				'duration': self.pos2str(duration_seconds),
+				'boundaries': [],
+				'keep_intervals': [],
+				'warnings': ['Analysis cancelled.'],
+				'analysis_seconds': round(time.time() - t0, 2),
+				'cancelled': True,
+			}
 		clusters = self._cluster_points_from_events(black_events, silence_events)
 		start_cluster = self._choose_content_start(clusters, duration_seconds)
 		end_cluster = self._choose_content_end(clusters, duration_seconds)
