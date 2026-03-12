@@ -31,6 +31,7 @@ const {
   polling: analysisPolling,
   draft: analysisDraft,
   error: analysisError,
+  progress: analysisProgress,
   activeBoundaryId,
   activeBoundary,
   start: startAnalysis,
@@ -547,11 +548,23 @@ async function reloadCurrentSection() {
                         </span>
                       </div>
                       <div class="text-caption text-medium-emphasis">
-                        {{ analysisPolling ? 'polling' : 'ready' }}
+                        {{ analysisRunning ? `${analysisProgress.phase} · ${analysisProgress.percent}%` : (analysisPolling ? 'polling' : 'ready') }}
                       </div>
                     </div>
 
-                    <div v-if="analysisDraft" class="analysis-body">
+                    <div v-if="analysisRunning && !analysisDraft" class="analysis-body">
+                      <v-progress-linear
+                        :model-value="analysisProgress.percent"
+                        color="primary"
+                        height="10"
+                        rounded
+                      />
+                      <div class="text-caption text-medium-emphasis">
+                        {{ analysisProgress.phase }} on {{ analysisProgress.movie || selection?.movie || '-' }}
+                      </div>
+                    </div>
+
+                    <div v-else-if="analysisDraft" class="analysis-body">
                       <div class="analysis-actions">
                         <v-btn
                           size="small"

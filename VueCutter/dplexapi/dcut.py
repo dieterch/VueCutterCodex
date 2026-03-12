@@ -5,7 +5,9 @@ import concurrent.futures
 import subprocess
 import shlex
 import re
+import selectors
 from pprint import pformat as pf
+from rq import get_current_job
 
 class MediaUnavailableError(FileNotFoundError):
 	def __init__(self, path):
@@ -309,23 +311,78 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 			print(f"\nIn aframe:{(t1-t0):5.2f} sec.")
 			return frame_name
 
-	def _run_ffmpeg_detection(self, movie, exc_lst):
+	def _set_analysis_progress(self, phase, percent, movie_title="", cancellable=False):
+		job = get_current_job()
+		if job is None:
+			return
+		job.meta['analysis'] = {
+			'phase': phase,
+			'percent': max(0, min(int(percent), 100)),
+			'movie': movie_title,
+			'cancellable': cancellable,
+		}
+		job.save_meta()
+
+	def _progress_seconds_from_line(self, line):
+		if line.startswith('out_time_ms='):
+			try:
+				return int(line.split('=', 1)[1]) / 1_000_000
+			except ValueError:
+				return None
+		if line.startswith('out_time='):
+			try:
+				return self.str2pos(line.split('=', 1)[1].strip())
+			except Exception:
+				return None
+		return None
+
+	def _run_ffmpeg_detection(self, movie, exc_lst, phase, phase_start_percent, phase_end_percent, duration_seconds):
 		self.ensure_media(movie)
-		completed = subprocess.run(
+		process = subprocess.Popen(
 			exc_lst,
 			stdout=subprocess.PIPE,
 			stderr=subprocess.PIPE,
 			text=True,
-			check=False
+			bufsize=1,
 		)
-		if completed.returncode != 0:
+		selector = selectors.DefaultSelector()
+		if process.stdout:
+			selector.register(process.stdout, selectors.EVENT_READ, data='stdout')
+		if process.stderr:
+			selector.register(process.stderr, selectors.EVENT_READ, data='stderr')
+		stdout_chunks = []
+		stderr_chunks = []
+		last_percent = phase_start_percent
+		self._set_analysis_progress(phase, phase_start_percent, movie.title, cancellable=False)
+		while selector.get_map():
+			for key, _ in selector.select(timeout=0.5):
+				line = key.fileobj.readline()
+				if not line:
+					selector.unregister(key.fileobj)
+					continue
+				if key.data == 'stdout':
+					stdout_chunks.append(line)
+					seconds = self._progress_seconds_from_line(line.strip())
+					if seconds is None or duration_seconds <= 0:
+						continue
+					phase_progress = max(0.0, min(seconds / duration_seconds, 1.0))
+					percent = int(phase_start_percent + (phase_end_percent - phase_start_percent) * phase_progress)
+					if percent > last_percent:
+						last_percent = percent
+						self._set_analysis_progress(phase, percent, movie.title, cancellable=False)
+				else:
+					stderr_chunks.append(line)
+		returncode = process.wait()
+		selector.close()
+		self._set_analysis_progress(phase, phase_end_percent, movie.title, cancellable=False)
+		if returncode != 0:
 			raise subprocess.CalledProcessError(
-				completed.returncode,
+				returncode,
 				exc_lst,
-				output=completed.stdout,
-				stderr=completed.stderr
+				output=''.join(stdout_chunks),
+				stderr=''.join(stderr_chunks)
 			)
-		return f"{completed.stdout}\n{completed.stderr}"
+		return ''.join(stdout_chunks) + '\n' + ''.join(stderr_chunks)
 
 	def _parse_black_events(self, log_text):
 		pattern = re.compile(r"black_start:(?P<start>\d+(?:\.\d+)?)\s+black_end:(?P<end>\d+(?:\.\d+)?)\s+black_duration:(?P<duration>\d+(?:\.\d+)?)")
@@ -512,28 +569,33 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 		path = self._pathname(movie)
 		duration_seconds = max(int(movie.duration // 1000), 0)
 		warnings = []
+		self._set_analysis_progress('starting', 0, movie.title, cancellable=False)
 		black_log = self._run_ffmpeg_detection(movie, [
 			self._ffmpeg_binary,
 			'-hide_banner',
 			'-loglevel', 'info',
+			'-nostats',
+			'-progress', 'pipe:1',
 			'-i', path,
 			'-vf', 'blackdetect=d=0.4:pic_th=0.98',
 			'-an',
 			'-f', 'null',
 			'-'
-		])
+		], 'blackdetect', 0, 50, duration_seconds)
 		black_events = self._parse_black_events(black_log)
 		try:
 			silence_log = self._run_ffmpeg_detection(movie, [
 				self._ffmpeg_binary,
 				'-hide_banner',
 				'-loglevel', 'info',
+				'-nostats',
+				'-progress', 'pipe:1',
 				'-i', path,
 				'-af', 'silencedetect=n=-35dB:d=0.5',
 				'-vn',
 				'-f', 'null',
 				'-'
-			])
+			], 'silencedetect', 50, 100, duration_seconds)
 			silence_events = self._parse_silence_events(silence_log)
 		except subprocess.CalledProcessError:
 			silence_events = []

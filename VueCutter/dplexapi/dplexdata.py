@@ -82,6 +82,7 @@ class Plexdata:
                 print(f"Redis connection target: {redis_host}:{redis_port}")
                 self.redis_connection = Redis(**redis_kwargs)
                 self.q = Queue('VueCutter', connection=self.redis_connection, default_timeout=600)
+                self.analysis_timeout = int(os.getenv('VUECUTTER_ANALYSIS_TIMEOUT', '7200'))
                 # initialization.
                 self.initial_series_key = 0
                 self.initial_season_key = 0
@@ -417,7 +418,11 @@ class Plexdata:
         m = await self._update_movie(movie_name)
         self.cutter.ensure_media(m)
         mm = self.plex.MovieData(m)
-        job = self.q.enqueue_call(self.cutter.analyze_recording, args=(mm,))
+        job = self.q.enqueue_call(
+            self.cutter.analyze_recording,
+            args=(mm,),
+            timeout=self.analysis_timeout,
+        )
         return {
             'job_id': job.id,
             'status': job.get_status(refresh=True),
@@ -433,6 +438,9 @@ class Plexdata:
             'job_id': job.id,
             'status': status,
         }
+        analysis_meta = job.meta.get('analysis', {}) if hasattr(job, 'meta') else {}
+        if analysis_meta:
+            payload['progress'] = analysis_meta
         if status == 'failed':
             payload['error'] = job.exc_info.splitlines()[-1] if job.exc_info else 'Analysis failed.'
             return payload

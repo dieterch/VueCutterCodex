@@ -28,6 +28,12 @@ type AnalysisStatusResponse = {
   status: string
   movie?: string
   error?: string
+  progress?: {
+    phase: string
+    percent: number
+    movie?: string
+    cancellable?: boolean
+  }
   result?: AnalysisResult
 }
 
@@ -130,6 +136,12 @@ export function useAnalysis() {
   const draft = useState<AnalysisResult | null>('analysisDraft', () => null)
   const error = useState('analysisError', () => '')
   const activeBoundaryId = useState('analysisActiveBoundaryId', () => '')
+  const progress = useState('analysisProgress', () => ({
+    phase: 'idle',
+    percent: 0,
+    movie: '',
+    cancellable: false,
+  }))
 
   function stopPolling() {
     if (pollingTimer.value) {
@@ -147,6 +159,12 @@ export function useAnalysis() {
     draft.value = null
     error.value = ''
     activeBoundaryId.value = ''
+    progress.value = {
+      phase: 'idle',
+      percent: 0,
+      movie: '',
+      cancellable: false,
+    }
   }
 
   function applyStatusResponse(response: AnalysisStatusResponse) {
@@ -157,6 +175,9 @@ export function useAnalysis() {
       if (!activeBoundaryId.value && response.result.boundaries.length > 0) {
         activeBoundaryId.value = response.result.boundaries[0].id
       }
+    }
+    if (response.progress) {
+      progress.value = response.progress
     }
     if (response.error) {
       error.value = response.error
@@ -247,6 +268,7 @@ export function useAnalysis() {
     polling,
     draft,
     error,
+    progress,
     activeBoundaryId,
     activeBoundary,
     start,
