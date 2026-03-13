@@ -695,6 +695,7 @@ async function reloadCurrentSection() {
               <v-card-text class="pa-3 worker-panel">
                 <div><strong>Status:</strong> {{ progress.status }}</div>
                 <div><strong>Title:</strong> {{ progress.title }}</div>
+                <div v-if="progress.cut_phase"><strong>Phase:</strong> {{ progress.cut_phase }}</div>
                 <div><strong>Cut:</strong> {{ progress.cut_progress }}%</div>
                 <div><strong>Polling:</strong> {{ polling ? 'active' : 'idle' }}</div>
                 <v-btn class="mt-2" size="small" color="primary" @click="refreshProgress">Refresh Progress</v-btn>

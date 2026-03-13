@@ -329,6 +329,17 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 		}
 		job.save_meta()
 
+	def _set_cut_progress(self, phase, percent, movie_title=""):
+		job = get_current_job()
+		if job is None:
+			return
+		job.meta['cut'] = {
+			'phase': phase,
+			'percent': max(0, min(int(percent), 100)),
+			'movie': movie_title,
+		}
+		job.save_meta()
+
 	def _request_analysis_cancel(self, phase='cancelling', percent=None, movie_title=""):
 		job = get_current_job()
 		if job is None:
@@ -430,6 +441,53 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 		returncode = process.wait()
 		selector.close()
 		self._set_analysis_progress(phase, phase_end_percent, movie.title, cancellable=False)
+		if returncode != 0:
+			raise subprocess.CalledProcessError(
+				returncode,
+				exc_lst,
+				output=''.join(stdout_chunks),
+				stderr=''.join(stderr_chunks)
+			)
+		return ''.join(stdout_chunks) + '\n' + ''.join(stderr_chunks)
+
+	def _run_ffmpeg_cut_process(self, exc_lst, movie, phase, phase_start_percent, phase_end_percent, duration_seconds):
+		process = subprocess.Popen(
+			exc_lst,
+			stdout=subprocess.PIPE,
+			stderr=subprocess.PIPE,
+			text=True,
+			bufsize=1,
+		)
+		selector = selectors.DefaultSelector()
+		if process.stdout:
+			selector.register(process.stdout, selectors.EVENT_READ, data='stdout')
+		if process.stderr:
+			selector.register(process.stderr, selectors.EVENT_READ, data='stderr')
+		stdout_chunks = []
+		stderr_chunks = []
+		last_percent = phase_start_percent
+		self._set_cut_progress(phase, phase_start_percent, movie.title)
+		while selector.get_map():
+			for key, _ in selector.select(timeout=0.5):
+				line = key.fileobj.readline()
+				if not line:
+					selector.unregister(key.fileobj)
+					continue
+				if key.data == 'stdout':
+					stdout_chunks.append(line)
+					seconds = self._progress_seconds_from_line(line.strip())
+					if seconds is None or duration_seconds <= 0:
+						continue
+					phase_progress = max(0.0, min(seconds / duration_seconds, 1.0))
+					percent = int(phase_start_percent + (phase_end_percent - phase_start_percent) * phase_progress)
+					if percent > last_percent:
+						last_percent = percent
+						self._set_cut_progress(phase, percent, movie.title)
+				else:
+					stderr_chunks.append(line)
+		returncode = process.wait()
+		selector.close()
+		self._set_cut_progress(phase, phase_end_percent, movie.title)
 		if returncode != 0:
 			raise subprocess.CalledProcessError(
 				returncode,
@@ -755,15 +813,15 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 		if len(cutlist) > 1:
 			print()
 			print(f"'{self._filename(movie)}' wird mit ffmpeg zusammengefügt. -]+{cutlist}+[- ")
-			exc_lst = [self._ffmpeg_binary,"-y","-hide_banner","-loglevel","fatal", "-i"]
+			total_cut_seconds = max(sum([max(self.str2pos(cut['t1']) - self.str2pos(cut['t0']), 0) for cut in cutlist]), 1)
+			exc_lst = [self._ffmpeg_binary,"-y","-hide_banner","-loglevel","error","-nostats","-progress","pipe:1","-i"]
 			file_lst = [f"{self._foldername(movie)}part{i}.ts" for i in range(len(cutlist))]
 			exc_lst += [f"concat:" + '|'.join(file_lst),"-c","copy",f"{targetname}"]
 			try:
 				print("---------------------------------")
 				print(f"exc_lst: {exc_lst}")
 				print("---------------------------------")
-				res = subprocess.check_output(exc_lst)
-				res = res.decode('utf-8')
+				res = self._run_ffmpeg_cut_process(exc_lst, movie, 'join', 85, 100, total_cut_seconds)
 				print(f"'{self._filename(movie)}' wurde mit ffmeg zusammengefügt.")
 				# delete part*.ts files
 				for i in range(len(cutlist)):
@@ -791,22 +849,28 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 	def _ffmpegsplit(self, movie, cutlist, inplace = False):
 		print()
 		print(f"'{self._filename(movie)}' wird mit ffmpeg geschnitten. -]+{cutlist}+[- ")
-		exc_lst = [self._ffmpeg_binary,"-y","-hide_banner","-loglevel","fatal"]
-		map_lst = []
-		for i, cut  in enumerate(cutlist):
-			exc_lst += ["-ss",f"{cut['t0']}","-to",f"{cut['t1']}","-i",f"{self._pathname(movie)}"]
-			map_lst += [f"-map",f"{i}:v","-map",f"{i}:a","-map",f"{i}:s?", "-c", "copy", f"{self._foldername(movie)}part{i}.ts"]
-		exc_lst += map_lst
-		try:
-			print("---------------------------------")
-			print(f"exc_lst: {exc_lst}")
-			print("---------------------------------")
-			res = subprocess.check_output(exc_lst)
-			res = res.decode('utf-8')
-			print(f"'{self._filename(movie)}' wurde mit ffmeg nach {self._foldername(movie)}part0.ts geschnitten.")
-			return res
-		except subprocess.CalledProcessError as e:
-			raise e
+		total_cut_seconds = max(sum([max(self.str2pos(cut['t1']) - self.str2pos(cut['t0']), 0) for cut in cutlist]), 1)
+		processed_seconds = 0
+		results = []
+		for i, cut in enumerate(cutlist):
+			cut_seconds = max(self.str2pos(cut['t1']) - self.str2pos(cut['t0']), 1)
+			phase_start = int((processed_seconds / total_cut_seconds) * 85)
+			processed_seconds += cut_seconds
+			phase_end = int((processed_seconds / total_cut_seconds) * 85)
+			exc_lst = [
+				self._ffmpeg_binary, "-y", "-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1",
+				"-ss", f"{cut['t0']}", "-to", f"{cut['t1']}", "-i", f"{self._pathname(movie)}",
+				"-map", "0:v", "-map", "0:a", "-map", "0:s?", "-c", "copy", f"{self._foldername(movie)}part{i}.ts"
+			]
+			try:
+				print("---------------------------------")
+				print(f"exc_lst: {exc_lst}")
+				print("---------------------------------")
+				results.append(self._run_ffmpeg_cut_process(exc_lst, movie, f'split {i+1}/{len(cutlist)}', phase_start, phase_end, cut_seconds))
+			except subprocess.CalledProcessError as e:
+				raise e
+		print(f"'{self._filename(movie)}' wurde mit ffmeg nach {self._foldername(movie)}part0.ts geschnitten.")
+		return "\n".join(results)
 
 	def cut(self, movie, cutlist, inplace=False):
 		t0 = time.time()
@@ -817,6 +881,7 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 			'inplace': inplace,
 			'engine': 'ffmpeg'
 		}
+		self._set_cut_progress('preparing', 0, movie.title)
 		self.ensure_media(movie)
 		#check ob .ap und .sc Dateien existieren, wenn nicht, erzeugen
 		restxt += f"{self._filename(movie)} exists ? {os.path.exists(self._pathname(movie))}\n"
@@ -876,6 +941,7 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 			'CutTime': (t2 - t1),
 			'TotalTime': (t2 - t0),
 		})
+		self._set_cut_progress('finished', 100, movie.title)
 		print(f"elapsed time: {(t2 - t0):7.0f} sec.")
 		if self.target != "":
 			self.delete_target_files()

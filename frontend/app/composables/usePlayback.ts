@@ -5,6 +5,7 @@ type FrameResponse = {
 type ProgressState = {
   title: string
   cut_progress: number
+  cut_phase?: string
   apsc_progress: number
   started: number
   status: string
@@ -20,6 +21,7 @@ export function usePlayback() {
   const progress = useState<ProgressState>('progress', () => ({
     title: '-',
     cut_progress: 0,
+    cut_phase: '',
     apsc_progress: 0,
     started: 0,
     status: 'idle',

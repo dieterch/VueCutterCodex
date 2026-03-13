@@ -526,7 +526,10 @@ class Plexdata:
                 for job_id in self.q.started_job_registry.get_job_ids():
                     job = Job.fetch(job_id, connection=self.redis_connection)
                     m = self.plex.MovieData(job.args[0])
-                    prog = self.cutter._movie_stats(*job.args)
+                    cut_meta = job.meta.get('cut', {})
+                    prog = cut_meta.get('percent')
+                    if prog is None:
+                        prog = self.cutter._movie_stats(*job.args)
                     apsc_prog = self.cutter._apsc_stats(*job.args)
                     #apsc_size = plexdata.cutter._apsc_size(m)
                     d = {
@@ -536,6 +539,7 @@ class Plexdata:
                         'name': job_id,
                         'status':job.get_status(refresh=True),
                         'cut_progress':prog,
+                        'cut_phase': cut_meta.get('phase', ''),
                         'apsc_progress':apsc_prog
                     }
                     qd['started_jobs'].append(d)
@@ -543,6 +547,7 @@ class Plexdata:
                         'title': m.title,
                         #'apsc_size': apsc_size,
                         'cut_progress': prog,
+                        'cut_phase': cut_meta.get('phase', ''),
                         'apsc_progress':apsc_prog,
                         'started': self.q.started_job_registry.count,
                         'status': d['status']           
