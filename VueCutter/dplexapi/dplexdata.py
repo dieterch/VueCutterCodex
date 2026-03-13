@@ -353,6 +353,28 @@ class Plexdata:
             return { 'movie': m.title, 'eta': eta, 'eta_cut': eta_cut, 'eta_apsc': eta_apsc, 'cutfile': cutfile, 'apsc' : apsc }
         else:
             raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
+
+    async def _analyze_movie(self, req=None):
+        if self.plex is None:
+            raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
+        if not self.hostalive():
+            self.initialize()
+        section_name = req.get('section') if req else self._selection['section'].title
+        serie_name = req.get('serie') if req else None
+        season_name = req.get('season') if req else None
+        movie_name = req.get('movie') if req else self._selection['movie'].title
+        await self._update_section(section_name)
+        if serie_name:
+            await self._update_serie(serie_name)
+        if season_name:
+            await self._update_season(season_name)
+        movie = await self._update_movie(movie_name)
+        movie.analyze()
+        return {
+            'status': 'started',
+            'movie': movie.title,
+            'message': f"Plex analyze started for '{movie.title}'.",
+        }
     
     async def _frame(self, req):
         if not self.hostalive():

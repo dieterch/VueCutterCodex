@@ -287,6 +287,15 @@ async def api_movie_cut_info():
         return json_error(str(exc))
 
 
+@app.route("/api/movie/analyze", methods=['POST'])
+async def api_movie_analyze():
+    try:
+        req = await read_json_request()
+        return await plexdata._analyze_movie(req)
+    except Exception as exc:
+        return json_error(str(exc))
+
+
 @app.route("/api/frame", methods=['POST'])
 async def api_frame():
     try:

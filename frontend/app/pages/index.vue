@@ -1,4 +1,5 @@
 <script setup lang="ts">
+const { apiFetch } = useApi()
 const { posToStr, strToPos, posValid } = useTimecode()
 const { selection, movieInfo, loading, refreshSelection, reloadSection, selectSection, selectSeries, selectSeason, selectMovie } = useSelection()
 const { positionSeconds, frameUrl, frameLoading, frameError, mediaAvailable, loadFrame, clearFrameState, refreshProgress, progress, polling } = usePlayback()
@@ -62,6 +63,7 @@ const canOpenCutDialog = computed(() => {
   }
   return markersFormValid.value || safeCutlist.value.length > 0
 })
+const movieAnalyzeRunning = useState('movieAnalyzeRunning', () => false)
 const positionString = computed({
   get: () => posToStr(positionSeconds.value),
   set: (value: string) => {
@@ -164,6 +166,27 @@ async function openCutDialog() {
     return
   }
   await openDialog(selection.value.section, selection.value.movie)
+}
+
+async function analyzeCurrentMovie() {
+  if (!selection.value?.section || !selection.value?.movie || mediaActionsDisabled.value || movieAnalyzeRunning.value) {
+    return
+  }
+  movieAnalyzeRunning.value = true
+  try {
+    await apiFetch('/api/movie/analyze', {
+      method: 'POST',
+      body: {
+        section: selection.value.section,
+        serie: selection.value.serie || '',
+        season: selection.value.season || '',
+        movie: selection.value.movie,
+      },
+    })
+    await refreshProgress().catch(() => {})
+  } finally {
+    movieAnalyzeRunning.value = false
+  }
 }
 
 async function submitCut() {
@@ -520,6 +543,9 @@ async function reloadCurrentSection() {
                   </v-btn>
                   <v-btn size="small" color="primary" :disabled="!canOpenCutDialog" @click="openCutDialog">
                     Open Cut Dialog
+                  </v-btn>
+                  <v-btn size="small" color="secondary" :loading="movieAnalyzeRunning" :disabled="mediaActionsDisabled || movieAnalyzeRunning" @click="analyzeCurrentMovie">
+                    Analyze in Plex
                   </v-btn>
                   <v-btn size="small" color="error" variant="tonal" @click="resetMarkers">
                     Reset Markers
