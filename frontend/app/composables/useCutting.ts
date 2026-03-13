@@ -73,7 +73,7 @@ export function useCutting() {
     return true
   }
 
-  async function submit(section: string, movie: string) {
+  async function submit(section: string, movie: string, onComplete?: () => void | Promise<void>) {
     if (!movie || cutlist.value.length === 0) {
       return
     }
@@ -92,7 +92,7 @@ export function useCutting() {
       })
       dialogOpen.value = false
       await refreshProgress()
-      startProgressPolling()
+      startProgressPolling(3000, onComplete)
     } catch (error: any) {
       submissionError.value = error?.data?.error || error?.message || 'Unable to start cut.'
       throw error

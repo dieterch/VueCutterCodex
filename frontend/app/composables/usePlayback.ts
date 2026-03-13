@@ -76,7 +76,7 @@ export function usePlayback() {
     polling.value = false
   }
 
-  function startProgressPolling(intervalMs = 3000) {
+  function startProgressPolling(intervalMs = 3000, onComplete?: () => void | Promise<void>) {
     stopProgressPolling()
     polling.value = true
     pollingTimer.value = setInterval(async () => {
@@ -84,6 +84,9 @@ export function usePlayback() {
         await refreshProgress()
         if (progress.value.status === 'idle' && progress.value.started === 0) {
           stopProgressPolling()
+          if (onComplete) {
+            await onComplete()
+          }
         }
       } catch {
         stopProgressPolling()

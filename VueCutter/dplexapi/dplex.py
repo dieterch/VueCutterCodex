@@ -124,13 +124,15 @@ class PlexInterface:
             self.locations = movie.locations 
             self.duration = movie.duration
             self.summary = movie.summary
+            self.ratingKey = getattr(movie, 'ratingKey', None)
 
         def __iter__(self):
             yield from {
                 "title": self.title,
                 "locations": self.locations,
                 "duration": self.duration,
-                "summary": self.summary
+                "summary": self.summary,
+                "ratingKey": self.ratingKey,
             }.items()
 
         def __str__(self):

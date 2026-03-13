@@ -32,6 +32,8 @@ xspf_template = """<?xml version="1.0" encoding="UTF-8"?>
 class Plexdata:
     def __init__(self, basedir) -> None:
         self.basedir = basedir
+        self._post_cut_refresh = None
+        self._processed_finished_cut_jobs = set()
         self.initialize()
 
     def initialize(self):
@@ -403,6 +405,95 @@ class Plexdata:
         else:
             raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
 
+    def _target_cut_duration_ms(self, cutlist):
+        seconds = sum([
+            max(self.cutter.str2pos(cut['t1']) - self.cutter.str2pos(cut['t0']), 0)
+            for cut in cutlist
+        ])
+        return seconds * 1000
+
+    def _fetch_movie_by_rating_key(self, rating_key):
+        if not rating_key:
+            return None
+        try:
+            return self.plex.server.fetchItem(int(rating_key))
+        except Exception:
+            try:
+                return self.plex.server.fetchItem(rating_key)
+            except Exception:
+                return None
+
+    def _current_selection_matches_rating_key(self, rating_key):
+        current = self._selection.get('movie')
+        return current is not None and str(getattr(current, 'ratingKey', '')) == str(rating_key)
+
+    def _start_post_cut_refresh(self, job):
+        inplace = bool(job.args[2]) if len(job.args) > 2 else False
+        if not inplace:
+            self._processed_finished_cut_jobs.add(job.id)
+            return None
+        movie_data = job.args[0]
+        rating_key = getattr(movie_data, 'ratingKey', None)
+        movie = self._fetch_movie_by_rating_key(rating_key)
+        if movie is None:
+            self._processed_finished_cut_jobs.add(job.id)
+            return None
+        expected_duration_ms = self._target_cut_duration_ms(job.args[1])
+        movie.analyze()
+        self._post_cut_refresh = {
+            'job_id': job.id,
+            'rating_key': str(rating_key),
+            'title': movie.title,
+            'expected_duration_ms': expected_duration_ms,
+            'started_at': time.time(),
+        }
+        return self._post_cut_refresh
+
+    def _poll_post_cut_refresh(self):
+        if not self._post_cut_refresh:
+            return None
+        if self.plex is None or not self.hostalive():
+            return {
+                'title': self._post_cut_refresh['title'],
+                'cut_progress': 100,
+                'cut_phase': 'waiting for plex',
+                'apsc_progress': 0,
+                'started': 1,
+                'status': 'started',
+            }
+        movie = self._fetch_movie_by_rating_key(self._post_cut_refresh['rating_key'])
+        if movie is None:
+            self._processed_finished_cut_jobs.add(self._post_cut_refresh['job_id'])
+            self._post_cut_refresh = None
+            return None
+        try:
+            movie.reload(checkFiles=True)
+        except Exception:
+            pass
+        current_duration_ms = getattr(movie, 'duration', 0) or 0
+        expected_duration_ms = self._post_cut_refresh['expected_duration_ms']
+        if current_duration_ms > 0 and abs(current_duration_ms - expected_duration_ms) <= 5000:
+            if self._current_selection_matches_rating_key(self._post_cut_refresh['rating_key']):
+                self._selection['movie'] = movie
+            self._processed_finished_cut_jobs.add(self._post_cut_refresh['job_id'])
+            self._post_cut_refresh = None
+            return {
+                'title': movie.title,
+                'cut_progress': 100,
+                'cut_phase': 'plex analyze finished',
+                'apsc_progress': 0,
+                'started': 0,
+                'status': 'idle',
+            }
+        return {
+            'title': movie.title,
+            'cut_progress': 100,
+            'cut_phase': f'plex analyze ({current_duration_ms // 1000}s / {(expected_duration_ms or 0) // 1000}s)',
+            'apsc_progress': 0,
+            'started': 1,
+            'status': 'started',
+        }
+
     async def _analyze_recording(self, req):
         if self.plex is None:
             raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
@@ -496,6 +587,7 @@ class Plexdata:
             mstatus = {
                 'title': '-',
                 'cut_progress': 0,
+                'cut_phase': '',
                 'apsc_progress': 0,
                 'started': 0,
                 'status': 'idle'
@@ -552,6 +644,36 @@ class Plexdata:
                         'started': self.q.started_job_registry.count,
                         'status': d['status']           
                     })
+
+            if self.q.started_job_registry.count == 0:
+                refresh_status = self._poll_post_cut_refresh()
+                if refresh_status is not None:
+                    return refresh_status
+
+                finished_cut_job = None
+                if self.q.finished_job_registry.count > 0:
+                    for job_id in reversed(self.q.finished_job_registry.get_job_ids()):
+                        if job_id in self._processed_finished_cut_jobs:
+                            continue
+                        job = Job.fetch(job_id, connection=self.redis_connection)
+                        if getattr(job, 'func_name', '').endswith('.cut'):
+                            ended_at = getattr(job, 'ended_at', None)
+                            if ended_at is not None and (time.time() - ended_at.timestamp()) > 300:
+                                self._processed_finished_cut_jobs.add(job_id)
+                                continue
+                            finished_cut_job = job
+                            break
+                if finished_cut_job is not None:
+                    refresh_state = self._start_post_cut_refresh(finished_cut_job)
+                    if refresh_state is not None:
+                        return {
+                            'title': refresh_state['title'],
+                            'cut_progress': 100,
+                            'cut_phase': 'plex analyze',
+                            'apsc_progress': 0,
+                            'started': 1,
+                            'status': 'started',
+                        }
 
             if self.q.finished_job_registry.count > 0:
                 qd['finished_jobs'] = []

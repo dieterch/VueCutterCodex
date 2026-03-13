@@ -30,10 +30,14 @@ export function useSelection() {
     loading.value = true
     try {
       selection.value = await apiFetch<SectionState>('/api/selection')
-      movieInfo.value = await apiFetch<{ movie_info: MovieInfo }>('/api/movie').then((res) => res.movie_info)
+      await refreshMovieInfo()
     } finally {
       loading.value = false
     }
+  }
+
+  async function refreshMovieInfo() {
+    movieInfo.value = await apiFetch<{ movie_info: MovieInfo }>('/api/movie').then((res) => res.movie_info)
   }
 
   async function selectSection(section: string) {
@@ -41,7 +45,7 @@ export function useSelection() {
       method: 'POST',
       body: { section },
     })
-    movieInfo.value = await apiFetch<{ movie_info: MovieInfo }>('/api/movie').then((res) => res.movie_info)
+    await refreshMovieInfo()
   }
 
   async function reloadSection(section?: string) {
@@ -71,7 +75,7 @@ export function useSelection() {
       return
     }
 
-    movieInfo.value = await apiFetch<{ movie_info: MovieInfo }>('/api/movie').then((res) => res.movie_info)
+    await refreshMovieInfo()
   }
 
   async function selectSeries(serie: string) {
@@ -79,7 +83,7 @@ export function useSelection() {
       method: 'POST',
       body: { serie },
     })
-    movieInfo.value = await apiFetch<{ movie_info: MovieInfo }>('/api/movie').then((res) => res.movie_info)
+    await refreshMovieInfo()
   }
 
   async function selectSeason(season: string) {
@@ -87,7 +91,7 @@ export function useSelection() {
       method: 'POST',
       body: { season },
     })
-    movieInfo.value = await apiFetch<{ movie_info: MovieInfo }>('/api/movie').then((res) => res.movie_info)
+    await refreshMovieInfo()
   }
 
   async function selectMovie(movie: string) {
@@ -100,7 +104,7 @@ export function useSelection() {
         movie,
       },
     })
-    movieInfo.value = await apiFetch<{ movie_info: MovieInfo }>('/api/movie').then((res) => res.movie_info)
+    await refreshMovieInfo()
   }
 
   return {
@@ -108,6 +112,7 @@ export function useSelection() {
     movieInfo,
     loading,
     refreshSelection,
+    refreshMovieInfo,
     reloadSection,
     selectSection,
     selectSeries,

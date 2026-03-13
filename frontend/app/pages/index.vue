@@ -170,7 +170,11 @@ async function submitCut() {
   if (!selection.value?.section || !selection.value?.movie || mediaActionsDisabled.value) {
     return
   }
-  await submit(selection.value.section, selection.value.movie).catch(() => {})
+  await submit(selection.value.section, selection.value.movie, async () => {
+    await refreshSelection()
+    positionSeconds.value = posValid(positionSeconds.value, durationSeconds.value)
+    await refreshFrame()
+  }).catch(() => {})
 }
 
 function removeCutInterval(index: number) {
