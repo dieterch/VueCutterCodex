@@ -17,23 +17,27 @@ type AnalysisKeepInterval = {
 type AnalysisResult = {
   movie: string
   duration: string
+  mode?: 'start_end' | 'full'
   boundaries: AnalysisBoundary[]
   keep_intervals: AnalysisKeepInterval[]
   warnings: string[]
   analysis_seconds: number
   cancelled?: boolean
+  cached?: boolean
 }
 
 type AnalysisStatusResponse = {
   job_id: string
   status: string
   movie?: string
+  mode?: 'start_end' | 'full'
   error?: string
   progress?: {
     phase: string
     percent: number
     movie?: string
     cancellable?: boolean
+    mode?: 'start_end' | 'full'
   }
   result?: AnalysisResult
 }
@@ -43,6 +47,7 @@ type AnalysisRequest = {
   serie?: string
   season?: string
   movie_name: string
+  mode?: 'start_end' | 'full'
 }
 
 function sortBoundaries(boundaries: AnalysisBoundary[], strToPos: (value: string) => number) {
@@ -136,12 +141,14 @@ export function useAnalysis() {
   const pollingTimer = useState<ReturnType<typeof setInterval> | null>('analysisPollingTimer', () => null)
   const draft = useState<AnalysisResult | null>('analysisDraft', () => null)
   const error = useState('analysisError', () => '')
+  const mode = useState<'start_end' | 'full'>('analysisMode', () => 'start_end')
   const activeBoundaryId = useState('analysisActiveBoundaryId', () => '')
   const progress = useState('analysisProgress', () => ({
     phase: 'idle',
     percent: 0,
     movie: '',
     cancellable: false,
+    mode: 'start_end' as 'start_end' | 'full',
   }))
 
   function stopPolling() {
@@ -159,26 +166,40 @@ export function useAnalysis() {
     status.value = 'idle'
     draft.value = null
     error.value = ''
+    mode.value = 'start_end'
     activeBoundaryId.value = ''
     progress.value = {
       phase: 'idle',
       percent: 0,
       movie: '',
       cancellable: false,
+      mode: 'start_end',
     }
   }
 
   function applyStatusResponse(response: AnalysisStatusResponse) {
     jobId.value = response.job_id
     status.value = response.status
+    if (response.mode) {
+      mode.value = response.mode
+    }
     if (response.result) {
       draft.value = response.result
+      if (response.result.mode) {
+        mode.value = response.result.mode
+      }
       if (!activeBoundaryId.value && response.result.boundaries.length > 0) {
         activeBoundaryId.value = response.result.boundaries[0].id
       }
     }
     if (response.progress) {
-      progress.value = response.progress
+      progress.value = {
+        phase: response.progress.phase,
+        percent: response.progress.percent,
+        movie: response.progress.movie || '',
+        cancellable: response.progress.cancellable ?? false,
+        mode: response.progress.mode || mode.value,
+      }
     }
     if (response.error) {
       error.value = response.error
@@ -212,6 +233,7 @@ export function useAnalysis() {
 
   async function start(request: AnalysisRequest) {
     reset()
+    mode.value = request.mode || 'start_end'
     const response = await apiFetch<AnalysisStatusResponse>('/api/analyze/recording', {
       method: 'POST',
       body: request,
@@ -283,6 +305,7 @@ export function useAnalysis() {
     draft,
     error,
     progress,
+    mode,
     activeBoundaryId,
     activeBoundary,
     start,

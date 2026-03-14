@@ -33,6 +33,7 @@ const {
   draft: analysisDraft,
   error: analysisError,
   progress: analysisProgress,
+  mode: analysisMode,
   activeBoundaryId,
   activeBoundary,
   start: startAnalysis,
@@ -247,7 +248,7 @@ function applyDetectedIntervals() {
   resetMarkers()
 }
 
-async function analyzeRecording() {
+async function analyzeRecording(mode: 'start_end' | 'full') {
   if (!selection.value?.section || !selection.value?.movie || mediaActionsDisabled.value) {
     return
   }
@@ -256,6 +257,7 @@ async function analyzeRecording() {
     serie: selection.value.serie,
     season: selection.value.season,
     movie_name: selection.value.movie,
+    mode,
   }).catch(() => {})
 }
 
@@ -535,8 +537,24 @@ async function reloadCurrentSection() {
                   <v-btn size="small" color="primary" :disabled="mediaActionsDisabled" @click="setCutEnd">
                     End: {{ cutEnd || '--:--:--' }}
                   </v-btn>
-                  <v-btn size="small" color="secondary" :loading="analysisRunning" :disabled="!canRunAnalysis" @click="analyzeRecording">
-                    Analyze Recording
+                  <v-btn
+                    size="small"
+                    color="secondary"
+                    :loading="analysisRunning && analysisMode === 'start_end'"
+                    :disabled="!canRunAnalysis"
+                    @click="analyzeRecording('start_end')"
+                  >
+                    Analyze Start/End
+                  </v-btn>
+                  <v-btn
+                    size="small"
+                    color="secondary"
+                    variant="tonal"
+                    :loading="analysisRunning && analysisMode === 'full'"
+                    :disabled="!canRunAnalysis"
+                    @click="analyzeRecording('full')"
+                  >
+                    Analyze Ad Breaks
                   </v-btn>
                   <v-btn size="small" :disabled="!markersFormValid || mediaActionsDisabled" @click="addCurrentInterval">
                     Add Interval
@@ -579,7 +597,7 @@ async function reloadCurrentSection() {
                         </span>
                       </div>
                       <div class="text-caption text-medium-emphasis">
-                        {{ analysisRunning ? `${analysisProgress.phase} · ${analysisProgress.percent}%` : (analysisPolling ? 'polling' : 'ready') }}
+                        {{ analysisRunning ? `${analysisProgress.phase} · ${analysisProgress.percent}%` : (analysisPolling ? 'polling' : `${analysisDraft?.mode === 'full' ? 'full analysis' : 'start/end analysis'}`) }}
                       </div>
                     </div>
 
@@ -601,7 +619,7 @@ async function reloadCurrentSection() {
                         rounded
                       />
                       <div class="text-caption text-medium-emphasis">
-                        {{ analysisProgress.phase }} on {{ analysisProgress.movie || selection?.movie || '-' }}
+                        {{ analysisProgress.phase }} · {{ analysisProgress.mode === 'full' ? 'full' : 'start/end' }} · {{ analysisProgress.movie || selection?.movie || '-' }}
                       </div>
                     </div>
 

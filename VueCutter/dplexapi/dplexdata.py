@@ -519,6 +519,9 @@ class Plexdata:
     async def _analyze_recording(self, req):
         if self.plex is None:
             raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
+        mode = req.get('mode', 'start_end')
+        if mode not in ('start_end', 'full'):
+            mode = 'start_end'
         section_name = req.get('section', self._selection['section'].title)
         serie_name = req.get('serie')
         season_name = req.get('season')
@@ -531,15 +534,32 @@ class Plexdata:
         m = await self._update_movie(movie_name)
         self.cutter.ensure_media(m)
         mm = self.plex.MovieData(m)
+        cached_result = self.cutter._cached_analysis(mm, mode)
+        if cached_result is not None:
+            return {
+                'job_id': f'cached:{mode}:{cached_result.get("movie", m.title)}',
+                'status': 'finished',
+                'movie': m.title,
+                'mode': mode,
+                'progress': {
+                    'phase': 'cached',
+                    'percent': 100,
+                    'movie': m.title,
+                    'cancellable': False,
+                    'mode': mode,
+                },
+                'result': cached_result,
+            }
         job = self.q.enqueue_call(
             self.cutter.analyze_recording,
-            args=(mm,),
+            args=(mm, mode),
             timeout=self.analysis_timeout,
         )
         return {
             'job_id': job.id,
             'status': job.get_status(refresh=True),
             'movie': m.title,
+            'mode': mode,
         }
 
     async def _analysis_status(self, job_id):
@@ -566,6 +586,8 @@ class Plexdata:
             payload['status'] = 'cancelled'
             return payload
         payload['movie'] = job.args[0].title if job.args else ''
+        if len(job.args) > 1:
+            payload['mode'] = job.args[1]
         return payload
 
     async def _cancel_analysis(self, job_id):

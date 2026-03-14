@@ -7,6 +7,7 @@ import shlex
 import re
 import selectors
 import signal
+import hashlib
 from pprint import pformat as pf
 from rq import get_current_job
 
@@ -24,6 +25,7 @@ class CutterInterface:
 		self._ffmpeg_binary = '/usr/bin/ffmpeg'
 		self._media_root = os.getenv('VUECUTTER_MEDIA_ROOT', '').rstrip('/')
 		self._media_keep_share = os.getenv('VUECUTTER_MEDIA_KEEP_SHARE', 'true').lower() != 'false'
+		self._analysis_cache = {}
 		self.last_movie = ""
 		self.target = ""
 
@@ -315,7 +317,7 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 			print(f"\nIn aframe:{(t1-t0):5.2f} sec.")
 			return frame_name
 
-	def _set_analysis_progress(self, phase, percent, movie_title="", cancellable=False):
+	def _set_analysis_progress(self, phase, percent, movie_title="", cancellable=False, mode="start_end"):
 		job = get_current_job()
 		if job is None:
 			return
@@ -326,6 +328,7 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 			'movie': movie_title,
 			'cancellable': cancellable,
 			'cancel_requested': current.get('cancel_requested', False),
+			'mode': mode,
 		}
 		job.save_meta()
 
@@ -340,7 +343,7 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 		}
 		job.save_meta()
 
-	def _request_analysis_cancel(self, phase='cancelling', percent=None, movie_title=""):
+	def _request_analysis_cancel(self, phase='cancelling', percent=None, movie_title="", mode="start_end"):
 		job = get_current_job()
 		if job is None:
 			return
@@ -351,6 +354,7 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 			'movie': movie_title or current.get('movie', ''),
 			'cancellable': False,
 			'cancel_requested': True,
+			'mode': mode or current.get('mode', 'start_end'),
 		}
 		job.save_meta()
 
@@ -394,7 +398,7 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 				return None
 		return None
 
-	def _run_ffmpeg_detection(self, movie, exc_lst, phase, phase_start_percent, phase_end_percent, duration_seconds):
+	def _run_ffmpeg_detection(self, movie, exc_lst, phase, phase_start_percent, phase_end_percent, duration_seconds, mode="start_end"):
 		self.ensure_media(movie)
 		process = subprocess.Popen(
 			exc_lst,
@@ -413,11 +417,11 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 		stderr_chunks = []
 		last_percent = phase_start_percent
 		last_cancel_check = 0.0
-		self._set_analysis_progress(phase, phase_start_percent, movie.title, cancellable=False)
+		self._set_analysis_progress(phase, phase_start_percent, movie.title, cancellable=True, mode=mode)
 		while selector.get_map():
 			cancel_requested, last_cancel_check = self._cancel_requested(last_cancel_check)
 			if cancel_requested:
-				self._request_analysis_cancel(movie_title=movie.title)
+				self._request_analysis_cancel(movie_title=movie.title, mode=mode)
 				self._terminate_process(process)
 				selector.close()
 				raise AnalysisCancelledError(f'Analysis cancelled for {movie.title}.')
@@ -435,12 +439,12 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 					percent = int(phase_start_percent + (phase_end_percent - phase_start_percent) * phase_progress)
 					if percent > last_percent:
 						last_percent = percent
-						self._set_analysis_progress(phase, percent, movie.title, cancellable=False)
+						self._set_analysis_progress(phase, percent, movie.title, cancellable=True, mode=mode)
 				else:
 					stderr_chunks.append(line)
 		returncode = process.wait()
 		selector.close()
-		self._set_analysis_progress(phase, phase_end_percent, movie.title, cancellable=False)
+		self._set_analysis_progress(phase, phase_end_percent, movie.title, cancellable=True, mode=mode)
 		if returncode != 0:
 			raise subprocess.CalledProcessError(
 				returncode,
@@ -529,6 +533,201 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 				})
 				current_start = None
 		return events
+
+	def _analysis_cache_key(self, movie, mode):
+		path = movie.locations[0] if movie.locations else movie.title
+		try:
+			stat = os.stat(self._pathname(movie))
+			payload = f"{mode}|{path}|{stat.st_size}|{int(stat.st_mtime)}"
+		except Exception:
+			payload = f"{mode}|{path}|{getattr(movie, 'duration', 0)}"
+		return hashlib.sha1(payload.encode('utf-8')).hexdigest()
+
+	def _cached_analysis(self, movie, mode):
+		key = self._analysis_cache_key(movie, mode)
+		result = self._analysis_cache.get(key)
+		if result is None:
+			return None
+		return {**result, 'cached': True}
+
+	def _store_analysis_cache(self, movie, mode, result):
+		key = self._analysis_cache_key(movie, mode)
+		self._analysis_cache[key] = {**result, 'mode': mode}
+
+	def _offset_events(self, events, offset_seconds):
+		return [
+			{
+				**event,
+				'start': event['start'] + offset_seconds,
+				'end': event['end'] + offset_seconds,
+			}
+			for event in events
+		]
+
+	def _window_bounds(self, duration_seconds, kind):
+		window_size = min(max(25 * 60, duration_seconds // 5 if duration_seconds else 0), 30 * 60)
+		window_size = max(min(window_size, duration_seconds if duration_seconds > 0 else window_size), 1)
+		if kind == 'start':
+			return 0, window_size
+		return max(duration_seconds - window_size, 0), min(window_size, duration_seconds)
+
+	def _run_window_detection(self, movie, kind, phase_prefix, phase_start_percent, phase_end_percent, mode="start_end", include_silence=False):
+		duration_seconds = max(int(movie.duration // 1000), 0)
+		offset_seconds, window_seconds = self._window_bounds(duration_seconds, kind)
+		path = self._pathname(movie)
+		black_log = self._run_ffmpeg_detection(movie, [
+			self._ffmpeg_binary,
+			'-hide_banner',
+			'-loglevel', 'info',
+			'-nostats',
+			'-progress', 'pipe:1',
+			'-ss', self.pos2str(int(offset_seconds)),
+			'-t', self.pos2str(int(window_seconds)),
+			'-i', path,
+			'-vf', 'blackdetect=d=0.2:pic_th=0.97',
+			'-an',
+			'-f', 'null',
+			'-'
+		], f'{phase_prefix} {kind} window', phase_start_percent, phase_end_percent, max(window_seconds, 1), mode=mode)
+		black_events = self._offset_events(self._parse_black_events(black_log), offset_seconds)
+		silence_events = []
+		if include_silence:
+			try:
+				silence_log = self._run_ffmpeg_detection(movie, [
+					self._ffmpeg_binary,
+					'-hide_banner',
+					'-loglevel', 'info',
+					'-nostats',
+					'-progress', 'pipe:1',
+					'-ss', self.pos2str(int(offset_seconds)),
+					'-t', self.pos2str(int(window_seconds)),
+					'-i', path,
+					'-af', 'silencedetect=n=-35dB:d=0.35',
+					'-vn',
+					'-f', 'null',
+					'-'
+				], f'{phase_prefix} {kind} refine', phase_end_percent, phase_end_percent, max(window_seconds, 1), mode=mode)
+				silence_events = self._offset_events(self._parse_silence_events(silence_log), offset_seconds)
+			except subprocess.CalledProcessError:
+				silence_events = []
+		return black_events, silence_events
+
+	def _candidate_score(self, candidate_time, target_time, preferred_start, preferred_end, base_score):
+		score = base_score
+		if preferred_start <= candidate_time <= preferred_end:
+			score += 2.5
+		distance = abs(candidate_time - target_time)
+		score += max(0.0, 2.0 - (distance / 180.0))
+		return round(score, 3)
+
+	def _select_edge_candidate(self, black_events, silence_events, kind, duration_seconds):
+		target_time = min(15 * 60, duration_seconds / 2 if duration_seconds else 15 * 60) if kind == 'start' else max(duration_seconds - 15 * 60, 0)
+		if kind == 'start':
+			preferred_start = min(5 * 60, max(duration_seconds - 1, 0))
+			preferred_end = min(20 * 60, duration_seconds)
+		else:
+			preferred_start = max(duration_seconds - 20 * 60, 0)
+			preferred_end = max(duration_seconds - 5 * 60, 0)
+		candidates = []
+		for event in black_events:
+			moment = event['end'] if kind == 'start' else event['start']
+			base = 3.0 + min(event['duration'], 2.0)
+			candidates.append({
+				'time': moment,
+				'score': self._candidate_score(moment, target_time, preferred_start, preferred_end, base),
+				'source': 'black',
+			})
+		for event in silence_events:
+			moment = event['end'] if kind == 'start' else event['start']
+			base = 1.0 + min(event['duration'], 1.0)
+			candidates.append({
+				'time': moment,
+				'score': self._candidate_score(moment, target_time, preferred_start, preferred_end, base),
+				'source': 'silence',
+			})
+		if not candidates:
+			return None
+		return max(candidates, key=lambda candidate: (candidate['score'], -abs(candidate['time'] - target_time)))
+
+	def _detect_start_end_boundaries(self, movie, mode="start_end"):
+		duration_seconds = max(int(movie.duration // 1000), 0)
+		warnings = []
+		start_black, start_silence = self._run_window_detection(movie, 'start', 'scan', 0, 35, mode=mode, include_silence=True)
+		start_candidate = self._select_edge_candidate(start_black, start_silence, 'start', duration_seconds)
+		end_black, end_silence = self._run_window_detection(movie, 'end', 'scan', 50, 85, mode=mode, include_silence=True)
+		end_candidate = self._select_edge_candidate(end_black, end_silence, 'end', duration_seconds)
+		boundaries = []
+		if start_candidate is None:
+			warnings.append('No confident content start detected; defaulting to recording start.')
+			boundaries.append({'id': 'content-start', 'kind': 'content_start', 'time': self.pos2str(0), 'confidence': 0.1})
+		else:
+			boundaries.append({
+				'id': 'content-start',
+				'kind': 'content_start',
+				'time': self.pos2str(int(start_candidate['time'])),
+				'confidence': round(min(start_candidate['score'] / 5.0, 1.0), 2),
+			})
+		if end_candidate is None:
+			warnings.append('No confident content end detected; defaulting to recording end.')
+			boundaries.append({'id': 'content-end', 'kind': 'content_end', 'time': self.pos2str(duration_seconds), 'confidence': 0.1})
+		else:
+			boundaries.append({
+				'id': 'content-end',
+				'kind': 'content_end',
+				'time': self.pos2str(int(end_candidate['time'])),
+				'confidence': round(min(end_candidate['score'] / 5.0, 1.0), 2),
+			})
+		return sorted(boundaries, key=lambda boundary: self.str2pos(boundary['time'])), warnings
+
+	def _scan_ad_breaks(self, movie, content_start_seconds, content_end_seconds, mode="full"):
+		if content_end_seconds - content_start_seconds < 180:
+			return [], ['Recording is too short for reliable ad-break detection.']
+		path = self._pathname(movie)
+		chunk_size = 20 * 60
+		current = content_start_seconds
+		all_black_events = []
+		chunk_index = 0
+		total_seconds = max(content_end_seconds - content_start_seconds, 1)
+		while current < content_end_seconds:
+			window_seconds = min(chunk_size, content_end_seconds - current)
+			phase_start = 60 + int(35 * ((current - content_start_seconds) / total_seconds))
+			phase_end = 60 + int(35 * (((current - content_start_seconds) + window_seconds) / total_seconds))
+			log_text = self._run_ffmpeg_detection(movie, [
+				self._ffmpeg_binary,
+				'-hide_banner',
+				'-loglevel', 'info',
+				'-nostats',
+				'-progress', 'pipe:1',
+				'-ss', self.pos2str(int(current)),
+				'-t', self.pos2str(int(window_seconds)),
+				'-i', path,
+				'-vf', 'blackdetect=d=0.25:pic_th=0.97',
+				'-an',
+				'-f', 'null',
+				'-'
+			], f'scan ads {chunk_index + 1}', phase_start, phase_end, max(window_seconds, 1), mode=mode)
+			all_black_events.extend(self._offset_events(self._parse_black_events(log_text), current))
+			current += window_seconds
+			chunk_index += 1
+		clusters = self._cluster_points_from_events(all_black_events, [])
+		pairs = self._pair_ad_clusters(clusters, content_start_seconds, content_end_seconds)
+		boundaries = []
+		for pair_index, (ad_start, ad_end) in enumerate(pairs):
+			boundaries.append({
+				'id': f'ad-start-{pair_index}',
+				'kind': 'ad_start',
+				'time': self.pos2str(int(ad_start['time'])),
+				'confidence': round(min(ad_start['score'] / 3.0, 1.0), 2),
+			})
+			boundaries.append({
+				'id': f'ad-end-{pair_index}',
+				'kind': 'ad_end',
+				'time': self.pos2str(int(ad_end['time'])),
+				'confidence': round(min(ad_end['score'] / 3.0, 1.0), 2),
+			})
+		if not boundaries:
+			return [], ['No confident ad breaks detected inside the content window.']
+		return sorted(boundaries, key=lambda boundary: self.str2pos(boundary['time'])), []
 
 	def _cluster_boundary_points(self, points, merge_window=6):
 		if not points:
@@ -676,46 +875,38 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 			warnings.append('No remaining keep intervals could be derived from the detected boundaries.')
 		return intervals, warnings
 
-	def analyze_recording(self, movie):
+	def analyze_recording(self, movie, mode='start_end'):
 		t0 = time.time()
 		self.ensure_media(movie)
-		path = self._pathname(movie)
 		duration_seconds = max(int(movie.duration // 1000), 0)
+		cached = self._cached_analysis(movie, mode)
+		if cached is not None:
+			self._set_analysis_progress('cached', 100, movie.title, cancellable=False, mode=mode)
+			return cached
 		warnings = []
-		self._set_analysis_progress('starting', 0, movie.title, cancellable=True)
+		self._set_analysis_progress('starting', 0, movie.title, cancellable=True, mode=mode)
 		try:
-			black_log = self._run_ffmpeg_detection(movie, [
-				self._ffmpeg_binary,
-				'-hide_banner',
-				'-loglevel', 'info',
-				'-nostats',
-				'-progress', 'pipe:1',
-				'-i', path,
-				'-vf', 'blackdetect=d=0.4:pic_th=0.98',
-				'-an',
-				'-f', 'null',
-				'-'
-			], 'blackdetect', 0, 50, duration_seconds)
-			black_events = self._parse_black_events(black_log)
-			try:
-				silence_log = self._run_ffmpeg_detection(movie, [
-					self._ffmpeg_binary,
-					'-hide_banner',
-					'-loglevel', 'info',
-					'-nostats',
-					'-progress', 'pipe:1',
-					'-i', path,
-					'-af', 'silencedetect=n=-35dB:d=0.5',
-					'-vn',
-					'-f', 'null',
-					'-'
-				], 'silencedetect', 50, 100, duration_seconds)
-				silence_events = self._parse_silence_events(silence_log)
-			except subprocess.CalledProcessError:
-				silence_events = []
-				warnings.append('Audio silence detection was unavailable; using video-only boundary hints.')
+			start_end_cached = self._cached_analysis(movie, 'start_end') if mode == 'full' else None
+			if start_end_cached is not None:
+				boundaries = list(start_end_cached.get('boundaries', []))
+				boundary_warnings = list(start_end_cached.get('warnings', []))
+				self._set_analysis_progress('reusing cached start/end', 55, movie.title, cancellable=True, mode=mode)
+			else:
+				boundaries, boundary_warnings = self._detect_start_end_boundaries(movie, mode=mode)
+			warnings.extend(boundary_warnings)
+			content_start_seconds = self.str2pos(next(boundary['time'] for boundary in boundaries if boundary['kind'] == 'content_start'))
+			content_end_seconds = self.str2pos(next(boundary['time'] for boundary in boundaries if boundary['kind'] == 'content_end'))
+			if mode == 'full' and content_end_seconds > content_start_seconds:
+				ad_boundaries, ad_warnings = self._scan_ad_breaks(movie, content_start_seconds, content_end_seconds, mode=mode)
+				boundaries.extend(ad_boundaries)
+				warnings.extend(ad_warnings)
+			else:
+				self._set_analysis_progress('finished start/end', 100, movie.title, cancellable=False, mode=mode)
+			boundaries = sorted(boundaries, key=lambda boundary: self.str2pos(boundary['time']))
+			keep_intervals, interval_warnings = self._derive_keep_intervals(boundaries)
+			warnings.extend(interval_warnings)
 		except AnalysisCancelledError:
-			self._request_analysis_cancel(phase='cancelled', percent=0, movie_title=movie.title)
+			self._request_analysis_cancel(phase='cancelled', percent=0, movie_title=movie.title, mode=mode)
 			return {
 				'movie': movie.title,
 				'duration': self.pos2str(duration_seconds),
@@ -724,57 +915,20 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 				'warnings': ['Analysis cancelled.'],
 				'analysis_seconds': round(time.time() - t0, 2),
 				'cancelled': True,
+				'mode': mode,
 			}
-		clusters = self._cluster_points_from_events(black_events, silence_events)
-		start_cluster = self._choose_content_start(clusters, duration_seconds)
-		end_cluster = self._choose_content_end(clusters, duration_seconds)
-		boundaries = []
-		if start_cluster is None:
-			warnings.append('No confident content start detected; defaulting to recording start.')
-			boundaries.append({'id': 'content-start', 'kind': 'content_start', 'time': self.pos2str(0), 'confidence': 0.1})
-		else:
-			boundaries.append({
-				'id': 'content-start',
-				'kind': 'content_start',
-				'time': self.pos2str(int(start_cluster['time'])),
-				'confidence': round(min(start_cluster['score'] / 3.0, 1.0), 2),
-			})
-		if end_cluster is None:
-			warnings.append('No confident content end detected; defaulting to recording end.')
-			boundaries.append({'id': 'content-end', 'kind': 'content_end', 'time': self.pos2str(duration_seconds), 'confidence': 0.1})
-		else:
-			boundaries.append({
-				'id': 'content-end',
-				'kind': 'content_end',
-				'time': self.pos2str(int(end_cluster['time'])),
-				'confidence': round(min(end_cluster['score'] / 3.0, 1.0), 2),
-			})
-		content_start_seconds = self.str2pos(next(boundary['time'] for boundary in boundaries if boundary['kind'] == 'content_start'))
-		content_end_seconds = self.str2pos(next(boundary['time'] for boundary in boundaries if boundary['kind'] == 'content_end'))
-		for pair_index, (ad_start, ad_end) in enumerate(self._pair_ad_clusters(clusters, content_start_seconds, content_end_seconds)):
-			boundaries.append({
-				'id': f'ad-start-{pair_index}',
-				'kind': 'ad_start',
-				'time': self.pos2str(int(ad_start['time'])),
-				'confidence': round(min(ad_start['score'] / 3.0, 1.0), 2),
-			})
-			boundaries.append({
-				'id': f'ad-end-{pair_index}',
-				'kind': 'ad_end',
-				'time': self.pos2str(int(ad_end['time'])),
-				'confidence': round(min(ad_end['score'] / 3.0, 1.0), 2),
-			})
-		boundaries = sorted(boundaries, key=lambda boundary: self.str2pos(boundary['time']))
-		keep_intervals, interval_warnings = self._derive_keep_intervals(boundaries)
-		warnings.extend(interval_warnings)
-		return {
+		result = {
 			'movie': movie.title,
 			'duration': self.pos2str(duration_seconds),
 			'boundaries': boundaries,
 			'keep_intervals': keep_intervals,
 			'warnings': warnings,
 			'analysis_seconds': round(time.time() - t0, 2),
+			'mode': mode,
 		}
+		self._store_analysis_cache(movie, mode, result)
+		self._set_analysis_progress('finished', 100, movie.title, cancellable=False, mode=mode)
+		return result
 
 	def _apsc(self,movie):
 		#check ob .ap und Datei existiert.
