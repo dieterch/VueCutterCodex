@@ -1,7 +1,7 @@
 <script setup lang="ts">
 const { apiFetch } = useApi()
 const { posToStr, strToPos, posValid } = useTimecode()
-const { selection, movieInfo, loading, refreshSelection, reloadSection, selectSection, selectSeries, selectSeason, selectMovie } = useSelection()
+const { selection, movieInfo, loading, refreshSelection, reloadSection, selectServer, selectSection, selectSeries, selectSeason, selectMovie } = useSelection()
 const { positionSeconds, frameUrl, frameLoading, frameError, mediaAvailable, loadFrame, clearFrameState, refreshProgress, progress, polling } = usePlayback()
 const {
   enabled: timelineEnabled,
@@ -47,11 +47,32 @@ const {
 const durationSeconds = computed(() => Math.trunc((movieInfo.value?.duration_ms ?? 0) / 1000))
 const durationLabel = computed(() => (durationSeconds.value > 0 ? posToStr(durationSeconds.value) : '--:--:--'))
 const positionMinuteLabel = computed(() => `${Math.trunc(positionSeconds.value / 60)}'`)
+const serverItems = computed(() => (
+  (selection.value?.servers ?? []).map((server) => ({
+    title: server.status === 'offline' ? `${server.name} (offline)` : server.name,
+    value: server.id,
+    props: {
+      disabled: !server.selectable,
+    },
+  }))
+))
+const activeServer = computed(() => (
+  (selection.value?.servers ?? []).find((server) => server.id === selection.value?.server) ?? null
+))
 const safeTimelineItems = computed(() => timelineItems.value.filter((item) => item && item.label))
 const safeCutlist = computed(() => cutlist.value.filter((interval) => interval && interval.t0 && interval.t1))
 const safeAnalysisBoundaries = computed(() => analysisDraft.value?.boundaries ?? [])
 const safeAnalysisIntervals = computed(() => analysisDraft.value?.keep_intervals ?? [])
 const analysisWarnings = computed(() => analysisDraft.value?.warnings ?? [])
+const plexServerUnavailable = computed(() => frameError.value.toLowerCase().includes('plex server unavailable'))
+const plexServerStatusText = computed(() => {
+  if (activeServer.value?.status === 'offline') {
+    return activeServer.value.reason
+      ? `${activeServer.value.name} is currently unreachable: ${activeServer.value.reason}`
+      : `${activeServer.value.name} is currently unreachable.`
+  }
+  return ''
+})
 const mediaActionsDisabled = computed(() => frameLoading.value || !mediaAvailable.value)
 const markersFormValid = computed(() => Boolean(cutStart.value && cutEnd.value && cutEnd.value > cutStart.value))
 const canRunAnalysis = computed(() => Boolean(selection.value?.movie) && !mediaActionsDisabled.value && !analysisRunning.value)
@@ -91,6 +112,15 @@ const rightJumpButtons = [
   { label: `+5"`, delta: 5 },
   { label: `+1"`, delta: 1 },
 ]
+
+function resetOperatorState() {
+  positionSeconds.value = 0
+  clearFrameState()
+  timelineEnabled.value = false
+  timelineItems.value = []
+  resetAll()
+  resetAnalysis()
+}
 
 async function refreshFrame() {
   if (!selection.value?.movie) {
@@ -263,46 +293,39 @@ async function analyzeRecording(mode: 'start_end' | 'full') {
 
 async function changeSection(value: string) {
   await selectSection(value)
-  positionSeconds.value = 0
-  clearFrameState()
-  timelineItems.value = []
-  resetAnalysis()
+  resetOperatorState()
   await refreshFrame()
 }
 
 async function changeSeries(value: string) {
   await selectSeries(value)
-  positionSeconds.value = 0
-  clearFrameState()
-  timelineItems.value = []
-  resetAnalysis()
+  resetOperatorState()
   await refreshFrame()
 }
 
 async function changeSeason(value: string) {
   await selectSeason(value)
-  positionSeconds.value = 0
-  clearFrameState()
-  timelineItems.value = []
-  resetAnalysis()
+  resetOperatorState()
   await refreshFrame()
 }
 
 async function changeMovie(value: string) {
   await selectMovie(value)
-  positionSeconds.value = 0
-  clearFrameState()
-  timelineItems.value = []
-  resetAnalysis()
+  resetOperatorState()
   await refreshFrame()
 }
 
+async function changeServer(value: string) {
+  await selectServer(value)
+  resetOperatorState()
+  if (selection.value?.movie) {
+    await refreshFrame()
+  }
+  await refreshProgress().catch(() => {})
+}
+
 onMounted(async () => {
-  resetAll()
-  resetAnalysis()
-  timelineEnabled.value = false
-  timelineItems.value = []
-  clearFrameState()
+  resetOperatorState()
   try {
     await refreshSelection()
   } catch {}
@@ -316,13 +339,15 @@ onMounted(async () => {
 
 async function reloadCurrentSection() {
   if (!selection.value?.section) {
+    await refreshSelection()
+    if (selection.value?.movie) {
+      await refreshFrame()
+    }
+    await refreshProgress().catch(() => {})
     return
   }
   await reloadSection(selection.value.section)
-  positionSeconds.value = 0
-  clearFrameState()
-  timelineItems.value = []
-  resetAnalysis()
+  resetOperatorState()
   await refreshFrame()
 }
 </script>
@@ -334,6 +359,18 @@ async function reloadCurrentSection() {
         <v-card rounded="lg" elevation="1" class="selection-bar">
           <v-card-text class="pa-3">
             <div class="selection-grid">
+              <div class="selection-field selection-field-server">
+                <v-select
+                  :items="serverItems"
+                  :model-value="selection?.server ?? null"
+                  :loading="loading"
+                  label="Server"
+                  density="compact"
+                  hide-details
+                  @update:model-value="changeServer"
+                />
+              </div>
+
               <div class="selection-field selection-field-section">
                 <v-select
                   :items="selection?.sections ?? []"
@@ -389,7 +426,27 @@ async function reloadCurrentSection() {
             <v-card rounded="lg" elevation="1" class="preview-card">
               <v-card-text class="pa-3">
                 <v-alert
-                  v-if="frameError"
+                  v-if="plexServerStatusText"
+                  type="info"
+                  variant="tonal"
+                  density="compact"
+                  class="mb-2"
+                  title="Plex server unavailable"
+                  :text="plexServerStatusText"
+                />
+
+                <v-alert
+                  v-if="plexServerUnavailable"
+                  type="info"
+                  variant="tonal"
+                  density="compact"
+                  class="mb-2"
+                  title="Plex server unavailable"
+                  :text="frameError"
+                />
+
+                <v-alert
+                  v-else-if="frameError"
                   type="warning"
                   variant="tonal"
                   density="compact"

@@ -89,10 +89,26 @@ HOST_CONFIG_PATH=./VueCutter/config.toml
 
 VUECUTTER_FILESERVER=192.168.15.10
 VUECUTTER_FILESERVER_MAC=10:bf:48:8d:5c:34
+VUECUTTER_PLEX_NAME=Main Plex
 VUECUTTER_PLEX_URL=http://192.168.15.10:32400
 VUECUTTER_PLEX_TOKEN=replace-me
 VUECUTTER_WOL_URL=http://192.168.15.65:5550/wolserver
 ```
+
+Optional second Plex server:
+
+```bash
+VUECUTTER_FILESERVER_2=192.168.15.95
+VUECUTTER_PLEX_NAME_2=Homelab Plex
+VUECUTTER_PLEX_URL_2=http://192.168.15.95:32500
+VUECUTTER_PLEX_TOKEN_2=replace-me-too
+```
+
+Notes:
+
+- each Plex server needs its own Plex token
+- both servers can reuse the same SMB credentials file under `/etc/smbcredentials`
+- both servers are expected to expose the same share structure, even if the SMB host differs
 
 For the default SMB-in-container mode, leave this empty:
 
@@ -132,6 +148,7 @@ Expected:
 - `8200` serves the Nuxt frontend
 - `5200/` returns backend JSON status
 - `5200/api/selection` returns Plex selection JSON
+- if a second server is configured, the frontend shows a server picker and keeps sleeping servers visible but disabled
 
 ## 7. How SMB mounting works now
 

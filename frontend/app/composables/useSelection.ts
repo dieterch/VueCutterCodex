@@ -1,4 +1,15 @@
+type ServerState = {
+  id: string
+  name: string
+  url: string
+  status: 'online' | 'offline'
+  reason?: string
+  selectable: boolean
+}
+
 type SectionState = {
+  servers: ServerState[]
+  server: string
   sections: string[]
   section: string
   section_type: string
@@ -30,7 +41,11 @@ export function useSelection() {
     loading.value = true
     try {
       selection.value = await apiFetch<SectionState>('/api/selection')
-      await refreshMovieInfo()
+      if (selection.value?.section && selection.value?.movie) {
+        await refreshMovieInfo()
+      } else {
+        movieInfo.value = null
+      }
     } finally {
       loading.value = false
     }
@@ -38,6 +53,18 @@ export function useSelection() {
 
   async function refreshMovieInfo() {
     movieInfo.value = await apiFetch<{ movie_info: MovieInfo }>('/api/movie').then((res) => res.movie_info)
+  }
+
+  async function selectServer(server: string) {
+    selection.value = await apiFetch<SectionState>('/api/selection/server', {
+      method: 'POST',
+      body: { server },
+    })
+    if (selection.value?.section && selection.value?.movie) {
+      await refreshMovieInfo()
+    } else {
+      movieInfo.value = null
+    }
   }
 
   async function selectSection(section: string) {
@@ -113,6 +140,7 @@ export function useSelection() {
     loading,
     refreshSelection,
     refreshMovieInfo,
+    selectServer,
     reloadSection,
     selectSection,
     selectSeries,

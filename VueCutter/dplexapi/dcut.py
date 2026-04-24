@@ -306,7 +306,7 @@ text='{(ftime[:2]+chr(92)+':'+ftime[3:5]+chr(92)+':'+ftime[-2:]).replace('0','O'
 			"-max_error_rate","1","-y" ]
 		self.ensure_media(movie)
 		try:
-			res = await subprocess.check_output(exc_lst)
+			res = subprocess.check_output(exc_lst)
 			res = res.decode('utf-8')
 			print(res)
 		except subprocess.CalledProcessError as err:

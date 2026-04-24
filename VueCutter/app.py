@@ -195,6 +195,7 @@ async def api_health():
         'status': 'ok',
         'service': 'vuecutter-backend',
         'plex_alive': plexdata.hostalive(),
+        'servers': plexdata.server_statuses(),
     }
 
 
@@ -202,6 +203,19 @@ async def api_health():
 async def api_selection():
     try:
         return plexdata.get_selection()
+    except Exception as exc:
+        return json_error(str(exc))
+
+
+@app.route("/api/selection/server", methods=['POST'])
+async def api_update_server():
+    try:
+        req = await read_json_request()
+        return plexdata.select_server(req.get('server', ''))
+    except ValueError as exc:
+        return json_error(str(exc), status=400)
+    except RuntimeError as exc:
+        return json_error(str(exc), status=503)
     except Exception as exc:
         return json_error(str(exc))
 
@@ -221,8 +235,11 @@ async def api_reload_section():
     try:
         req = await read_json_request()
         section = req.get('section', plexdata.section_title)
-        await plexdata._update_section(section, force=True)
+        if section:
+            await plexdata._update_section(section, force=True)
         return plexdata.get_selection()
+    except RuntimeError as exc:
+        return json_error(str(exc), status=503)
     except Exception as exc:
         return json_error(str(exc))
 
@@ -302,6 +319,8 @@ async def api_frame():
         req = await read_json_request()
         filename = await plexdata._frame(req)
         return {'frame': frame_url(filename, external=True)}
+    except RuntimeError as exc:
+        return json_error(str(exc), status=503)
     except FileNotFoundError as exc:
         return json_error(str(exc), status=503)
     except Exception as exc:
@@ -314,6 +333,8 @@ async def api_timeline():
         req = await read_json_request()
         result = await plexdata._timeline(req)
         return {'status': result}
+    except RuntimeError as exc:
+        return json_error(str(exc), status=503)
     except Exception as exc:
         return json_error(str(exc))
 
@@ -323,6 +344,8 @@ async def api_cut():
     try:
         req = await read_json_request()
         return await plexdata._cut2(req)
+    except RuntimeError as exc:
+        return json_error(str(exc), status=503)
     except Exception as exc:
         return json_error(str(exc))
 
@@ -332,6 +355,8 @@ async def api_analyze_recording():
     try:
         req = await read_json_request()
         return await plexdata._analyze_recording(req)
+    except RuntimeError as exc:
+        return json_error(str(exc), status=503)
     except FileNotFoundError as exc:
         return json_error(str(exc), status=503)
     except Exception as exc:
@@ -358,6 +383,8 @@ async def api_cancel_analyze_recording(job_id):
 async def api_progress():
     try:
         return await plexdata._doProgress()
+    except RuntimeError as exc:
+        return json_error(str(exc), status=503)
     except Exception as exc:
         return json_error(str(exc))
 

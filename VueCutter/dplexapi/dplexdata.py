@@ -3,11 +3,13 @@ from dplexapi.dplex import PlexInterface
 import tomllib
 from io import BytesIO
 from jinja2 import Template
-import os, time, subprocess
+import os
+import time
+import subprocess
 import pytz
-from redis import Redis
-from rq import Connection, Queue, Worker
+from rq import Queue, Worker
 from rq.job import Job
+from redis import Redis
 import requests
 
 
@@ -29,340 +31,509 @@ xspf_template = """<?xml version="1.0" encoding="UTF-8"?>
 	</extension>
 </playlist>"""
 
+
 class Plexdata:
     def __init__(self, basedir) -> None:
         self.basedir = basedir
-        self._post_cut_refresh = None
+        self.initial_movie_key = 0
+        self.initial_series_key = 0
+        self.initial_season_key = 0
         self._processed_finished_cut_jobs = set()
+        self._post_cut_refresh = {}
+        self._active_server_id = None
+        self._servers = {}
         self.initialize()
 
     def initialize(self):
         config_path = os.getenv('PLEXDATA_CONFIG', 'config.toml')
-        with open(config_path, mode="rb") as fp:
+        with open(config_path, mode='rb') as fp:
             self.cfg = tomllib.load(fp)
-        env_overrides = {
-            'fileserver': os.getenv('VUECUTTER_FILESERVER'),
-            'fileservermac': os.getenv('VUECUTTER_FILESERVER_MAC'),
-            'plexurl': os.getenv('VUECUTTER_PLEX_URL'),
-            'plextoken': os.getenv('VUECUTTER_PLEX_TOKEN'),
-            'redispw': os.getenv('VUECUTTER_REDIS_PASSWORD'),
-            'wolurl': os.getenv('VUECUTTER_WOL_URL'),
-        }
-        for key, value in env_overrides.items():
-            if value:
-                self.cfg[key] = value
-        if self.hostalive():
-            try:
-                self.plex = PlexInterface(self.cfg["plexurl"],self.cfg["plextoken"])
-                self.cutter = CutterInterface(self.cfg["fileserver"])
-                self.initial_section = self.plex.sections[0]
-                self.initial_movie_key = 0
-                self.initial_movie = self.initial_section.recentlyAdded()[self.initial_movie_key]
-                self._selection = { 
-                    'section_type': self.initial_section.type,
-                    'sections' : [s for s in self.plex.sections if ((s.type == 'movie') or (s.type == 'show'))],
-                    'section' : self.initial_section,
-                    'seasons' : None,
-                    'season' : None,
-                    'series' : None,
-                    'serie' : None,
-                    'movies' : self.initial_section.recentlyAdded(),
-                    'movie' : self.initial_movie,
-                    'pos_time' : '00:00:00'
-                    }
-                
-                redis_host = os.getenv('REDIS_HOST', 'redis' if os.getenv('IN_DOCKER') == 'true' else 'localhost')
-                redis_port = int(os.getenv('REDIS_PORT', '6379'))
-                redis_password = os.getenv('REDIS_PASSWORD', self.cfg.get('redispw', ''))
-                redis_kwargs = {
-                    'host': redis_host,
-                    'port': redis_port,
-                    'db': 0,
-                }
-                if redis_password:
-                    redis_kwargs['password'] = redis_password
-                print(f"Redis connection target: {redis_host}:{redis_port}")
-                self.redis_connection = Redis(**redis_kwargs)
-                self.q = Queue('VueCutter', connection=self.redis_connection, default_timeout=600)
-                self.analysis_timeout = int(os.getenv('VUECUTTER_ANALYSIS_TIMEOUT', '7200'))
-                # initialization.
-                self.initial_series_key = 0
-                self.initial_season_key = 0
-            except ConnectionError as e:
-                self.initial_movie = ''
-                self._selection = {} 
-                self.initial_section = ''
-                print(f"ConnectionError: {e}")
-                raise e
 
+        redis_host = os.getenv('REDIS_HOST', 'redis' if os.getenv('IN_DOCKER') == 'true' else 'localhost')
+        redis_port = int(os.getenv('REDIS_PORT', '6379'))
+        redis_password = os.getenv('REDIS_PASSWORD', os.getenv('VUECUTTER_REDIS_PASSWORD', self.cfg.get('redispw', '')))
+        redis_kwargs = {
+            'host': redis_host,
+            'port': redis_port,
+            'db': 0,
+        }
+        if redis_password:
+            redis_kwargs['password'] = redis_password
+
+        print(f"Redis connection target: {redis_host}:{redis_port}")
+        self.redis_connection = Redis(**redis_kwargs)
+        self.q = Queue('VueCutter', connection=self.redis_connection, default_timeout=600)
+        self.analysis_timeout = int(os.getenv('VUECUTTER_ANALYSIS_TIMEOUT', '7200'))
+
+        previous_servers = self._servers
+        previous_active = self._active_server_id
+        self._servers = {}
+        for server_cfg in self._load_server_configs():
+            previous = previous_servers.get(server_cfg['id'], {})
+            self._servers[server_cfg['id']] = {
+                'config': server_cfg,
+                'plex': previous.get('plex'),
+                'cutter': previous.get('cutter') or CutterInterface(server_cfg['fileserver']),
+                'selection': previous.get('selection'),
+                'status': previous.get('status', 'offline'),
+                'reason': previous.get('reason', ''),
+            }
+
+        self.refresh_server_statuses(eager=False)
+        self._active_server_id = self._pick_active_server(previous_active)
+
+    def _load_server_configs(self):
+        configs = []
+        primary = self._build_server_config('')
+        if primary:
+            configs.append(primary)
+        secondary = self._build_server_config('_2')
+        if secondary:
+            configs.append(secondary)
+        if not configs:
+            raise ValueError('No Plex server configured.')
+        return configs
+
+    def _build_server_config(self, suffix):
+        if suffix == '':
+            server_id = 'plex1'
+            default_name = 'Plex 1'
+            fallback = {
+                'url': self.cfg.get('plexurl', ''),
+                'token': self.cfg.get('plextoken', ''),
+                'fileserver': self.cfg.get('fileserver', ''),
+                'fileservermac': self.cfg.get('fileservermac', ''),
+                'wolurl': self.cfg.get('wolurl', ''),
+            }
         else:
-            self.plex = None
-            self.cutter = None
-            self.initial_movie = ''
-            self._selection = { }
-            self.initial_section = ''
+            server_id = 'plex2'
+            default_name = 'Plex 2'
+            fallback = {
+                'url': '',
+                'token': '',
+                'fileserver': '',
+                'fileservermac': '',
+                'wolurl': '',
+            }
+
+        url = os.getenv(f'VUECUTTER_PLEX_URL{suffix}', fallback['url'])
+        token = os.getenv(f'VUECUTTER_PLEX_TOKEN{suffix}', fallback['token'])
+        fileserver = os.getenv(f'VUECUTTER_FILESERVER{suffix}', fallback['fileserver'])
+        if not (url and token and fileserver):
+            return None
+
+        return {
+            'id': server_id,
+            'name': os.getenv(f'VUECUTTER_PLEX_NAME{suffix}', default_name),
+            'url': url,
+            'token': token,
+            'fileserver': fileserver,
+            'fileservermac': os.getenv(f'VUECUTTER_FILESERVER_MAC{suffix}', fallback['fileservermac']),
+            'wolurl': os.getenv(f'VUECUTTER_WOL_URL{suffix}', fallback['wolurl']),
+        }
+
+    def _pick_active_server(self, preferred_server_id=None):
+        if preferred_server_id in self._servers:
+            return preferred_server_id
+        for server_id, ctx in self._servers.items():
+            if ctx['status'] == 'online':
+                return server_id
+        return next(iter(self._servers.keys()), None)
+
+    def _probe_server(self, server_id):
+        ctx = self._servers[server_id]
+        try:
+            conn = requests.head(ctx['config']['url'], timeout=2)
+            status_code = getattr(conn, 'status_code', None)
+            conn.close()
+            if status_code in (200, 401):
+                return 'online', ''
+            return 'offline', f'HTTP {status_code}'
+        except requests.exceptions.RequestException as exc:
+            message = str(exc) or 'connection failed'
+            return 'offline', message
+
+    def _initialize_server_selection(self, server_id, force=False):
+        ctx = self._servers[server_id]
+        if ctx['status'] != 'online':
+            raise RuntimeError(self._server_unavailable_message(server_id))
+        if not force and ctx['plex'] is not None and ctx['selection'] is not None:
+            return ctx
+        try:
+            plex = PlexInterface(ctx['config']['url'], ctx['config']['token'])
+            sections = [section for section in plex.sections if section.type in ('movie', 'show')]
+            if not sections:
+                raise ValueError(f"No supported Plex sections found on '{ctx['config']['name']}'.")
+            initial_section = sections[0]
+            selection = self._build_selection_from_section(initial_section)
+            ctx['plex'] = plex
+            ctx['selection'] = selection
+            ctx['reason'] = ''
+            return ctx
+        except Exception as exc:
+            ctx['plex'] = None
+            ctx['selection'] = None
+            ctx['status'] = 'offline'
+            ctx['reason'] = str(exc)
+            raise RuntimeError(self._server_unavailable_message(server_id))
+
+    def refresh_server_statuses(self, eager=False):
+        for server_id, ctx in self._servers.items():
+            status, reason = self._probe_server(server_id)
+            ctx['status'] = status
+            ctx['reason'] = reason
+            if status == 'online':
+                if eager and (ctx['plex'] is None or ctx['selection'] is None):
+                    try:
+                        self._initialize_server_selection(server_id, force=ctx['selection'] is None)
+                    except RuntimeError:
+                        pass
+            else:
+                ctx['plex'] = None
+                ctx['selection'] = None
+
+    def server_statuses(self):
+        self.refresh_server_statuses(eager=False)
+        return [self._server_summary(server_id) for server_id in self._servers]
 
     def hostalive(self) -> bool:
-        try:
-            conn = requests.head(self.cfg['plexurl'], timeout=2)
-            if str(conn) == '<Response [401]>':
-                conn.close()
-                return True
+        self.refresh_server_statuses(eager=False)
+        return any(ctx['status'] == 'online' for ctx in self._servers.values())
+
+    def _server_summary(self, server_id):
+        ctx = self._servers[server_id]
+        reason = ctx['reason'].strip() if ctx['reason'] else ''
+        return {
+            'id': server_id,
+            'name': ctx['config']['name'],
+            'url': ctx['config']['url'],
+            'status': ctx['status'],
+            'reason': reason,
+            'selectable': ctx['status'] == 'online',
+        }
+
+    def _server_unavailable_message(self, server_id):
+        ctx = self._servers.get(server_id)
+        if ctx is None:
+            return 'Plex server unavailable: unknown server.'
+        reason = ctx['reason'].strip() if ctx['reason'] else 'server is offline or sleeping'
+        return f"Plex server unavailable: {ctx['config']['name']} ({ctx['config']['url']}) - {reason}."
+
+    def _blank_selection_payload(self):
+        return {
+            'sections': [],
+            'section': '',
+            'section_type': '',
+            'series': [],
+            'serie': '',
+            'seasons': [],
+            'season': '',
+            'movies': [],
+            'movie': '',
+            'pos_time': '00:00:00',
+        }
+
+    def _build_selection_from_section(self, section):
+        selection = {
+            'section_type': section.type,
+            'sections': [s for s in section._server.library.sections() if s.type in ('movie', 'show')],
+            'section': section,
+            'seasons': None,
+            'season': None,
+            'series': None,
+            'serie': None,
+            'movies': [],
+            'movie': None,
+            'pos_time': '00:00:00',
+        }
+        if section.type == 'movie':
+            movies = section.recentlyAdded()
+            selection['movies'] = movies
+            selection['movie'] = movies[self.initial_movie_key] if movies else None
+        elif section.type == 'show':
+            series = section.all()
+            selection['series'] = series
+            if series:
+                serie = series[self.initial_series_key]
+                seasons = serie.seasons()
+                season = seasons[self.initial_season_key] if seasons else None
+                movies = season.episodes() if season is not None else []
+                selection.update({
+                    'serie': serie,
+                    'seasons': seasons,
+                    'season': season,
+                    'movies': movies,
+                    'movie': movies[self.initial_movie_key] if movies else None,
+                })
             else:
-                return False
-        except requests.exceptions.RequestException as e:
-            print(str(e))
-            return False
-        
+                selection.update({
+                    'series': [],
+                    'seasons': [],
+                    'movies': [],
+                })
+        else:
+            raise ValueError('Unknown Plex section type.')
+        return selection
+
+    def _selection_payload(self, server_id):
+        base = {
+            'server': server_id,
+            'servers': [self._server_summary(key) for key in self._servers],
+        }
+        ctx = self._servers.get(server_id)
+        if ctx is None or ctx['status'] != 'online' or ctx['selection'] is None:
+            return {
+                **base,
+                **self._blank_selection_payload(),
+            }
+
+        selection = ctx['selection']
+        ret = {
+            **base,
+            'sections': [section.title for section in selection['sections']],
+            'section': selection['section'].title,
+            'pos_time': selection['pos_time'],
+        }
+        if selection['section'].type == 'movie':
+            ret.update({
+                'section_type': 'movie',
+                'movies': [movie.title for movie in selection['movies']],
+                'movie': selection['movie'].title if selection['movie'] is not None else '',
+            })
+        elif selection['section'].type == 'show':
+            ret.update({
+                'section_type': 'show',
+                'series': [serie.title for serie in selection['series'] or []],
+                'serie': selection['serie'].title if selection['serie'] is not None else '',
+                'seasons': [season.title for season in selection['seasons'] or []],
+                'season': selection['season'].title if selection['season'] is not None else '',
+                'movies': [episode.title for episode in selection['movies']],
+                'movie': selection['movie'].title if selection['movie'] is not None else '',
+            })
+        else:
+            raise ValueError('Unknown section type')
+        return ret
+
+    def _ensure_active_server(self, require_online=False, force_reload=False):
+        if self._active_server_id is None:
+            self._active_server_id = self._pick_active_server()
+        if self._active_server_id is None:
+            raise RuntimeError('Plex server unavailable: no Plex server configured.')
+        self.refresh_server_statuses(eager=False)
+        ctx = self._servers[self._active_server_id]
+        if ctx['status'] == 'online':
+            self._initialize_server_selection(self._active_server_id, force=force_reload)
+            return self._active_server_id, self._servers[self._active_server_id]
+        if require_online:
+            raise RuntimeError(self._server_unavailable_message(self._active_server_id))
+        return self._active_server_id, ctx
+
+    def _active_selection(self, require_online=False, force_reload=False):
+        _, ctx = self._ensure_active_server(require_online=require_online, force_reload=force_reload)
+        return ctx['selection']
+
+    def _active_plex(self):
+        _, ctx = self._ensure_active_server(require_online=True)
+        return ctx['plex']
+
+    def _active_cutter(self):
+        _, ctx = self._ensure_active_server(require_online=True)
+        return ctx['cutter']
+
+    def _active_server_name(self):
+        if self._active_server_id and self._active_server_id in self._servers:
+            return self._servers[self._active_server_id]['config']['name']
+        return 'Plex server'
+
+    def select_server(self, server_id):
+        if server_id not in self._servers:
+            raise ValueError(f"Unknown Plex server '{server_id}'.")
+        self.refresh_server_statuses(eager=False)
+        if self._servers[server_id]['status'] != 'online':
+            raise RuntimeError(self._server_unavailable_message(server_id))
+        self._active_server_id = server_id
+        self._initialize_server_selection(server_id, force=False)
+        return self.get_selection()
+
     def wolserver(self):
+        _, ctx = self._ensure_active_server(require_online=False)
+        wolurl = ctx['config'].get('wolurl') or self.cfg.get('wolurl')
+        if not wolurl:
+            raise ValueError('No WOL server configured.')
         try:
-            wolurl = self.cfg['wolurl']
-            r = requests.get(wolurl, timeout=30),
-            #r.raise_for_status()
-            return r
+            return requests.get(wolurl, timeout=30)
         except requests.exceptions.HTTPError as err:
             raise SystemExit(err)
-        
+
     @property
     def section_title(self):
-        if self.plex is not None:
-            return self._selection['section'].title
-        else:
-            return ''
+        selection = self._active_selection(require_online=False)
+        if selection and selection.get('section') is not None:
+            return selection['section'].title
+        return ''
 
     async def streamsectionall(self):
-        if self.plex is not None:
-            sec = self._selection['section']
-            mov = sec.all()
-            data = []
-            for i,m in enumerate(mov):
-                data.append({'i':i, 'title':m.title.replace('&','&amp;'), 'url': m.getStreamURL().replace('&','&amp;'), 'dur': m.duration})
-            j2_template = Template(xspf_template)
-            w = j2_template.render(data=data)    
-            b = BytesIO(w.encode('utf-8','xmlcharrefreplace'))
-            b.seek(0)
-            return b
-        else:
-            raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
+        selection = self._active_selection(require_online=True)
+        sec = selection['section']
+        mov = sec.all()
+        data = []
+        for i, movie in enumerate(mov):
+            data.append({'i': i, 'title': movie.title.replace('&', '&amp;'), 'url': movie.getStreamURL().replace('&', '&amp;'), 'dur': movie.duration})
+        j2_template = Template(xspf_template)
+        rendered = j2_template.render(data=data)
+        buffer = BytesIO(rendered.encode('utf-8', 'xmlcharrefreplace'))
+        buffer.seek(0)
+        return buffer
 
     async def streamsection(self):
-        if self.plex is not None:
-            movies = self._selection['movies']
-            data = []
-            for i,m in enumerate(movies):
-                data.append({'i':i, 'title':m.title.replace('&','&amp;'), 'url': m.getStreamURL().replace('&','&amp;'), 'dur': m.duration})
-            j2_template = Template(xspf_template)
-            w = j2_template.render(data=data)    
-            b = BytesIO(w.encode('utf-8','xmlcharrefreplace'))
-            b.seek(0)
-            return b
-        else:
-            raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
-    
+        selection = self._active_selection(require_online=True)
+        movies = selection['movies']
+        data = []
+        for i, movie in enumerate(movies):
+            data.append({'i': i, 'title': movie.title.replace('&', '&amp;'), 'url': movie.getStreamURL().replace('&', '&amp;'), 'dur': movie.duration})
+        j2_template = Template(xspf_template)
+        rendered = j2_template.render(data=data)
+        buffer = BytesIO(rendered.encode('utf-8', 'xmlcharrefreplace'))
+        buffer.seek(0)
+        return buffer
+
     async def streamurl(self):
-        if self.plex is not None:
-            m = self._selection['movie']
-            data = [{'i':0, 'title':m.title.replace('&','&amp;'), 'url': m.getStreamURL().replace('&','&amp;'), 'dur': m.duration}]
-            j2_template = Template(xspf_template)
-            w = j2_template.render(data=data)    
-            b = BytesIO(w.encode('utf-8','xmlcharrefreplace'))
-            b.seek(0)
-            return b
-        else:
-            raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
-    
+        selection = self._active_selection(require_online=True)
+        movie = selection['movie']
+        data = [{'i': 0, 'title': movie.title.replace('&', '&amp;'), 'url': movie.getStreamURL().replace('&', '&amp;'), 'dur': movie.duration}]
+        j2_template = Template(xspf_template)
+        rendered = j2_template.render(data=data)
+        buffer = BytesIO(rendered.encode('utf-8', 'xmlcharrefreplace'))
+        buffer.seek(0)
+        return buffer
+
     def get_selection(self):
-        if self.plex is not None:
-            ret = {
-                    'sections': [s.title for s in self._selection['sections']], 
-                    'section': self._selection['section'].title,
-                }
-            if self._selection['section'].type == "movie": #movie sections
-                ret.update({ 
-                    'section_type': 'movie',
-                    'movies': [m.title for m in self._selection['movies']], 
-                    'movie': self._selection['movie'].title,
-                    'pos_time' : self._selection['pos_time']    
-                })
-            elif self._selection['section'].type == "show": #series section
-                ret.update({
-                    'section_type': 'show',
-                    'series':[s.title for s in self._selection['series']],
-                    'serie': self._selection['serie'].title,
-                    'seasons': [season.title for season in self._selection['serie'].seasons()] if self._selection['section'].type == 'show' else [],
-                    'season': self._selection['season'].title,
-                    'movies': [e.title for e in self._selection['season']], 
-                    'movie': self._selection['movie'].title,
-                    'pos_time' : self._selection['pos_time']   
-                })
-            else:
-                raise ValueError('Unknown section type')
-            return ret
-        else:
-            self.initialize()
-            return {
-                    'sections': [s.title for s in self._selection['sections']], 
-                    'section': self._selection['section'].title,
-                }
-    
+        server_id, ctx = self._ensure_active_server(require_online=False)
+        if ctx['status'] == 'online':
+            self._initialize_server_selection(server_id, force=False)
+        return self._selection_payload(server_id)
+
     async def _update_section(self, section_name, force=False):
-        if self.plex is not None:
-            if ((self._selection['section'].title != section_name) or force):
-                if force:
-                    self.initialize()
-                section = self.plex.server.library.section(section_name)
-                if section.type == 'movie':
-                    movies = section.recentlyAdded()
-                    default_movie = movies[self.initial_movie_key]
-                    self._selection.update({ 
-                        'section_type': 'movie',
-                        'section' : section,
-                        'series' : None,
-                        'serie' : None, 
-                        'seasons' : None,
-                        'season' : None,
-                        'movies' : movies, 
-                        'movie' : default_movie 
-                    })
-                elif section.type == 'show':
-                    series = section.all()
-                    serie = series[self.initial_series_key]
-                    seasons = serie.seasons()
-                    season = seasons[self.initial_season_key]
-                    movies = season.episodes()
-                    default_movie = movies[self.initial_movie_key]
-                    self._selection.update({ 
-                        'section_type': 'show',
-                        'section' : section,
-                        'series' : series,
-                        'serie' : serie, 
-                        'seasons' : seasons,
-                        'season' : season,
-                        'movies' : movies, 
-                        'movie' : default_movie 
-                    })
-                else:
-                    raise ValueError('Unknown Plex section type.')           
-            else:
-                pass # no change in section
-            return self._selection['section']  
-        else:
-            self.initialize()
-    
+        server_id, ctx = self._ensure_active_server(require_online=True, force_reload=force)
+        selection = ctx['selection']
+        if selection is None:
+            raise RuntimeError(self._server_unavailable_message(server_id))
+        if force or selection['section'].title != section_name:
+            section = ctx['plex'].server.library.section(section_name)
+            ctx['selection'] = self._build_selection_from_section(section)
+        return ctx['selection']['section']
+
     async def _update_serie(self, serie_name, force=False):
-        if self.plex is not None:
-            if ((self._selection['serie'].title != serie_name) or force): 
-                print('*********** new',serie_name)
-                section = self._selection['section']
-                serie = [s for s in section.all() if s.title == serie_name][0]
-                seasons = serie.seasons()
-                season = seasons[self.initial_season_key]
-                movies = season.episodes()
-                default_movie = movies[self.initial_movie_key]
-                self._selection.update({ 
-                    'serie': serie, 
-                    'seasons' : seasons,
-                    'season': season, 
-                    'movies' : movies, 
-                    'movie' : default_movie 
-                })
-            else:
-                pass
-            return self._selection['serie']
-        else:
-            raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
-    
+        _, ctx = self._ensure_active_server(require_online=True)
+        selection = ctx['selection']
+        if selection is None or selection['section_type'] != 'show':
+            raise ValueError('Current section is not a show section.')
+        current = selection['serie']
+        if current is None or current.title != serie_name or force:
+            section = selection['section']
+            serie = [entry for entry in section.all() if entry.title == serie_name][0]
+            seasons = serie.seasons()
+            season = seasons[self.initial_season_key] if seasons else None
+            movies = season.episodes() if season is not None else []
+            selection.update({
+                'serie': serie,
+                'seasons': seasons,
+                'season': season,
+                'movies': movies,
+                'movie': movies[self.initial_movie_key] if movies else None,
+            })
+        return selection['serie']
+
     async def _update_season(self, season_name, force=False):
-        if self.plex is not None:
-            if ((self._selection['season'].title != season_name) or force): 
-                print('*********** new',season_name)
-                serie = self._selection['serie']
-                season = serie.season(season_name)
-                movies = season.episodes()
-                default_movie = movies[self.initial_movie_key]
-                self._selection.update({ 'season' : season, 'movies' : movies, 'movie' : default_movie })
-            else:
-                pass
-            return self._selection['season']
-        else:
-            raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
-    
+        _, ctx = self._ensure_active_server(require_online=True)
+        selection = ctx['selection']
+        if selection is None or selection['season'] is None:
+            raise ValueError('Current selection has no season.')
+        if selection['season'].title != season_name or force:
+            season = selection['serie'].season(season_name)
+            movies = season.episodes()
+            selection.update({
+                'season': season,
+                'movies': movies,
+                'movie': movies[self.initial_movie_key] if movies else None,
+            })
+        return selection['season']
+
     async def _update_movie(self, movie_name):
-        if self.plex is not None:
-            sel_movie = self._selection['movies'][self.initial_movie_key]
-            if movie_name != '':
-                lmovie = [m for m in self._selection['movies'] if m.title == movie_name]
-                if lmovie:
-                    sel_movie = lmovie[0]
-            self._selection['movie'] = sel_movie
-            return self._selection['movie']
-        else:
-            raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
-    
+        _, ctx = self._ensure_active_server(require_online=True)
+        selection = ctx['selection']
+        if selection is None:
+            raise RuntimeError(self._server_unavailable_message(self._active_server_id))
+        movies = selection['movies']
+        if not movies:
+            selection['movie'] = None
+            return None
+        sel_movie = movies[self.initial_movie_key]
+        if movie_name != '':
+            matching = [movie for movie in movies if movie.title == movie_name]
+            if matching:
+                sel_movie = matching[0]
+        selection['movie'] = sel_movie
+        return selection['movie']
+
     async def _timeline(self, req):
-        t0 = time.time()
-        #------------------------------
-        basename = str(req['basename']); 
-        pos = int(req['pos']); 
-        l = int(req['l']); 
-        r = int(req['r']); 
-        step = int(req['step']); 
+        selection = self._active_selection(require_online=True)
+        cutter = self._active_cutter()
+        basename = str(req['basename'])
+        pos = int(req['pos'])
+        left = int(req['l'])
+        right = int(req['r'])
+        step = int(req['step'])
         size = req['size']
-        m = self._selection['movie']
-        self.cutter.ensure_media(m)
-        target = self.basedir + "/dist/static/"+ basename
-        tl = self.cutter.gen_timeline(m.duration // 1000, pos, l, r, step)
-        r = self.cutter.timeline(m, target , size, tl)
-        #------------------------------
+        movie = selection['movie']
+        cutter.ensure_media(movie)
+        target = self.basedir + '/dist/static/' + basename
+        timeline = cutter.gen_timeline(movie.duration // 1000, pos, left, right, step)
+        t0 = time.time()
+        result = cutter.timeline(movie, target, size, timeline)
         t1 = time.time()
-        print(f"total:{(t1-t0):5.2f}")
-        #------------------------------
-        return r
-    
+        print(f"total:{(t1 - t0):5.2f}")
+        return result
+
     async def _movie_info(self, req):
-        if self.plex is not None:
-            if req is not None:
-                section_name = req['section']
-                movie_name = req['movie']
-                if movie_name != '':
-                    s = await self._update_section(section_name)
-                    m = await self._update_movie(movie_name)
-                    m_info = { 'movie_info': self.plex.movie_rec(m) }
-                else:
-                    if section_name == '':
-                        s = await self._update_section('Plex Recordings')
-                    m = await self._update_movie('')
-                    m_info = { 'movie_info': self.plex.movie_rec(m) }
-            else:
-                m_info = { 'movie_info': { 'duration': 0 } }
-            return m_info
-        else:
-            return { 'movie_info': { 'duration': 0 } }
-    
+        try:
+            self._ensure_active_server(require_online=True)
+        except RuntimeError:
+            return {'movie_info': {'duration': 0, 'duration_ms': 0}}
+        plex = self._active_plex()
+        selection = self._active_selection(require_online=True)
+        if req is not None:
+            section_name = req.get('section', selection['section'].title if selection and selection.get('section') is not None else '')
+            movie_name = req.get('movie', '')
+            if section_name:
+                await self._update_section(section_name)
+            movie = await self._update_movie(movie_name)
+            if movie is None:
+                return {'movie_info': {'duration': 0, 'duration_ms': 0}}
+            return {'movie_info': plex.movie_rec(movie)}
+        return {'movie_info': {'duration': 0, 'duration_ms': 0}}
+
     async def _movie_cut_info(self):
-        if self.plex is not None:
-            m = self._selection['movie']
-            self.cutter.ensure_media(m)
-            dmin = m.duration / 60000
-            apsc = self.cutter._apsc(m)
-            cutfile = self.cutter._cutfile(m)
-            eta_apsc = int((0.5 if not apsc else 0) * dmin)
-            eta_cut =  int(0.9 * dmin)
-            eta = eta_apsc + eta_cut
-            self._selection['eta'] = eta
-            return { 'movie': m.title, 'eta': eta, 'eta_cut': eta_cut, 'eta_apsc': eta_apsc, 'cutfile': cutfile, 'apsc' : apsc }
-        else:
-            raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
+        selection = self._active_selection(require_online=True)
+        cutter = self._active_cutter()
+        movie = selection['movie']
+        cutter.ensure_media(movie)
+        duration_minutes = movie.duration / 60000
+        apsc = cutter._apsc(movie)
+        cutfile = cutter._cutfile(movie)
+        eta_apsc = int((0.5 if not apsc else 0) * duration_minutes)
+        eta_cut = int(0.9 * duration_minutes)
+        eta = eta_apsc + eta_cut
+        selection['eta'] = eta
+        return {'movie': movie.title, 'eta': eta, 'eta_cut': eta_cut, 'eta_apsc': eta_apsc, 'cutfile': cutfile, 'apsc': apsc}
 
     async def _analyze_movie(self, req=None):
-        if self.plex is None:
-            raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
-        if not self.hostalive():
-            self.initialize()
-        section_name = req.get('section') if req else self._selection['section'].title
+        self._ensure_active_server(require_online=True)
+        selection = self._active_selection(require_online=True)
+        section_name = req.get('section') if req else selection['section'].title
         serie_name = req.get('serie') if req else None
         season_name = req.get('season') if req else None
-        movie_name = req.get('movie') if req else self._selection['movie'].title
+        movie_name = req.get('movie') if req else selection['movie'].title
         await self._update_section(section_name)
         if serie_name:
             await self._update_serie(serie_name)
@@ -375,78 +546,82 @@ class Plexdata:
             'movie': movie.title,
             'message': f"Plex analyze started for '{movie.title}'.",
         }
-    
-    async def _frame(self, req):
-        if not self.hostalive():
-            self.initialize()
-        if self.plex is not None:
-            if req is not None:
-                movie_name = req['movie_name']
-                pos_time = req['pos_time']
-                try:
-                    m = await self._update_movie(movie_name)
-                    self.cutter.ensure_media(m)
-                    pic_name = await self.cutter.aframe(m ,pos_time ,self.basedir + "/dist/static/")
-                except (subprocess.CalledProcessError, FileNotFoundError) as e:
-                    print(f"\nframe throws error:\n{str(e)}\n")             
-                    raise e
-            else:
-                raise ValueError('Missing frame request data')
-            return pic_name
-        else:
-            raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
-    
-    async def _cut2(self, req):
-        if self.plex is not None:
-            section_name = req['section']
-            movie_name = req['movie_name']
-            cutlist = req['cutlist']
-            inplace = req['inplace']
-            s = await self._update_section(section_name)
-            m = await self._update_movie(movie_name)
-            self.cutter.ensure_media(m)
-            res = f"Queue Cut From section '{s}', cut '{m.title}', cutlist{cutlist}, inplace={inplace}, engine=ffmpeg"
-            try:
-                mm = self.plex.MovieData(m)
-                print("will cut now:\n",res)
-                job = self.q.enqueue_call(self.cutter.cut, args=(mm,cutlist,inplace))
-                res = {
-                    'Section': s.title,
-                    'Duration Raw': mm.duration // 60000,
-                    'Duration Cut': sum([self.cutter.cutlength(cut['t0'],cut['t1']) for cut in cutlist]),
-                    'Cutlist': cutlist,
-                    'Inplace': inplace,
-                    'Engine': 'ffmpeg',
-                    '.ap .sc Files': self.cutter._apsc(m),
-                    'cut File': self.cutter._cutfile(m)
-                }
-                return { 'result': res}
-            except subprocess.CalledProcessError as e:
-                print(str(e))
-                return { 'result': str(e) }
-        else:
-            raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
 
-    def _target_cut_duration_ms(self, cutlist):
+    async def _frame(self, req):
+        selection = self._active_selection(require_online=True)
+        cutter = self._active_cutter()
+        if req is None:
+            raise ValueError('Missing frame request data')
+        movie_name = req['movie_name']
+        pos_time = req['pos_time']
+        try:
+            movie = await self._update_movie(movie_name)
+            cutter.ensure_media(movie)
+            return await cutter.aframe(movie, pos_time, self.basedir + '/dist/static/')
+        except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+            print(f"\nframe throws error:\n{str(exc)}\n")
+            raise exc
+
+    async def _cut2(self, req):
+        server_id, ctx = self._ensure_active_server(require_online=True)
+        section_name = req['section']
+        movie_name = req['movie_name']
+        cutlist = req['cutlist']
+        inplace = req['inplace']
+        section = await self._update_section(section_name)
+        movie = await self._update_movie(movie_name)
+        ctx['cutter'].ensure_media(movie)
+        try:
+            movie_data = ctx['plex'].MovieData(movie)
+            print("will cut now:\n", f"Queue Cut From server '{server_id}', section '{section}', cut '{movie.title}', cutlist{cutlist}, inplace={inplace}, engine=ffmpeg")
+            job = self.q.enqueue_call(ctx['cutter'].cut, args=(movie_data, cutlist, inplace))
+            job.meta['server_id'] = server_id
+            job.meta['job_kind'] = 'cut'
+            job.save_meta()
+            result = {
+                'Section': section.title,
+                'Duration Raw': movie_data.duration // 60000,
+                'Duration Cut': sum([ctx['cutter'].cutlength(cut['t0'], cut['t1']) for cut in cutlist]),
+                'Cutlist': cutlist,
+                'Inplace': inplace,
+                'Engine': 'ffmpeg',
+                '.ap .sc Files': ctx['cutter']._apsc(movie),
+                'cut File': ctx['cutter']._cutfile(movie),
+                'server': server_id,
+            }
+            return {'result': result}
+        except subprocess.CalledProcessError as exc:
+            print(str(exc))
+            return {'result': str(exc)}
+
+    def _target_cut_duration_ms(self, cutlist, server_id=None):
+        cutter = self._servers[server_id]['cutter'] if server_id in self._servers else self._active_cutter()
         seconds = sum([
-            max(self.cutter.str2pos(cut['t1']) - self.cutter.str2pos(cut['t0']), 0)
+            max(cutter.str2pos(cut['t1']) - cutter.str2pos(cut['t0']), 0)
             for cut in cutlist
         ])
         return seconds * 1000
 
-    def _fetch_movie_by_rating_key(self, rating_key):
-        if not rating_key:
+    def _fetch_movie_by_rating_key(self, server_id, rating_key):
+        if not rating_key or server_id not in self._servers:
             return None
+        ctx = self._servers[server_id]
+        if ctx['status'] != 'online':
+            return None
+        self._initialize_server_selection(server_id, force=False)
         try:
-            return self.plex.server.fetchItem(int(rating_key))
+            return ctx['plex'].server.fetchItem(int(rating_key))
         except Exception:
             try:
-                return self.plex.server.fetchItem(rating_key)
+                return ctx['plex'].server.fetchItem(rating_key)
             except Exception:
                 return None
 
-    def _current_selection_matches_rating_key(self, rating_key):
-        current = self._selection.get('movie')
+    def _current_selection_matches_rating_key(self, server_id, rating_key):
+        ctx = self._servers.get(server_id)
+        if ctx is None or ctx['selection'] is None:
+            return False
+        current = ctx['selection'].get('movie')
         return current is not None and str(getattr(current, 'ratingKey', '')) == str(rating_key)
 
     def _start_post_cut_refresh(self, job):
@@ -454,51 +629,58 @@ class Plexdata:
         if not inplace:
             self._processed_finished_cut_jobs.add(job.id)
             return None
+        server_id = job.meta.get('server_id', self._active_server_id)
         movie_data = job.args[0]
         rating_key = getattr(movie_data, 'ratingKey', None)
-        movie = self._fetch_movie_by_rating_key(rating_key)
-        if movie is None:
-            self._processed_finished_cut_jobs.add(job.id)
-            return None
-        expected_duration_ms = self._target_cut_duration_ms(job.args[1])
-        movie.analyze()
-        self._post_cut_refresh = {
+        expected_duration_ms = self._target_cut_duration_ms(job.args[1], server_id=server_id)
+        self._post_cut_refresh[server_id] = {
             'job_id': job.id,
+            'server_id': server_id,
             'rating_key': str(rating_key),
-            'title': movie.title,
+            'title': getattr(movie_data, 'title', ''),
             'expected_duration_ms': expected_duration_ms,
             'started_at': time.time(),
         }
-        return self._post_cut_refresh
+        movie = self._fetch_movie_by_rating_key(server_id, rating_key)
+        if movie is not None:
+            movie.analyze()
+        return self._post_cut_refresh[server_id]
 
-    def _poll_post_cut_refresh(self):
-        if not self._post_cut_refresh:
+    def _poll_post_cut_refresh(self, server_id):
+        refresh_state = self._post_cut_refresh.get(server_id)
+        if not refresh_state:
             return None
-        if self.plex is None or not self.hostalive():
+        ctx = self._servers.get(server_id)
+        if ctx is None or ctx['status'] != 'online':
             return {
-                'title': self._post_cut_refresh['title'],
+                'title': refresh_state['title'],
                 'cut_progress': 100,
                 'cut_phase': 'waiting for plex',
                 'apsc_progress': 0,
                 'started': 1,
                 'status': 'started',
             }
-        movie = self._fetch_movie_by_rating_key(self._post_cut_refresh['rating_key'])
+        movie = self._fetch_movie_by_rating_key(server_id, refresh_state['rating_key'])
         if movie is None:
-            self._processed_finished_cut_jobs.add(self._post_cut_refresh['job_id'])
-            self._post_cut_refresh = None
-            return None
+            return {
+                'title': refresh_state['title'],
+                'cut_progress': 100,
+                'cut_phase': 'plex refresh pending',
+                'apsc_progress': 0,
+                'started': 1,
+                'status': 'started',
+            }
         try:
             movie.reload(checkFiles=True)
         except Exception:
             pass
         current_duration_ms = getattr(movie, 'duration', 0) or 0
-        expected_duration_ms = self._post_cut_refresh['expected_duration_ms']
+        expected_duration_ms = refresh_state['expected_duration_ms']
         if current_duration_ms > 0 and abs(current_duration_ms - expected_duration_ms) <= 5000:
-            if self._current_selection_matches_rating_key(self._post_cut_refresh['rating_key']):
-                self._selection['movie'] = movie
-            self._processed_finished_cut_jobs.add(self._post_cut_refresh['job_id'])
-            self._post_cut_refresh = None
+            if self._current_selection_matches_rating_key(server_id, refresh_state['rating_key']):
+                ctx['selection']['movie'] = movie
+            self._processed_finished_cut_jobs.add(refresh_state['job_id'])
+            self._post_cut_refresh.pop(server_id, None)
             return {
                 'title': movie.title,
                 'cut_progress': 100,
@@ -517,59 +699,63 @@ class Plexdata:
         }
 
     async def _analyze_recording(self, req):
-        if self.plex is None:
-            raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
+        server_id, ctx = self._ensure_active_server(require_online=True)
         mode = req.get('mode', 'start_end')
         if mode not in ('start_end', 'full'):
             mode = 'start_end'
-        section_name = req.get('section', self._selection['section'].title)
+        selection = ctx['selection']
+        section_name = req.get('section', selection['section'].title)
         serie_name = req.get('serie')
         season_name = req.get('season')
-        movie_name = req.get('movie_name') or req.get('movie') or self._selection['movie'].title
+        movie_name = req.get('movie_name') or req.get('movie') or selection['movie'].title
         await self._update_section(section_name)
         if serie_name:
             await self._update_serie(serie_name)
         if season_name:
             await self._update_season(season_name)
-        m = await self._update_movie(movie_name)
-        self.cutter.ensure_media(m)
-        mm = self.plex.MovieData(m)
-        cached_result = self.cutter._cached_analysis(mm, mode)
+        movie = await self._update_movie(movie_name)
+        ctx['cutter'].ensure_media(movie)
+        movie_data = ctx['plex'].MovieData(movie)
+        cached_result = ctx['cutter']._cached_analysis(movie_data, mode)
         if cached_result is not None:
             return {
-                'job_id': f'cached:{mode}:{cached_result.get("movie", m.title)}',
+                'job_id': f'cached:{mode}:{cached_result.get("movie", movie.title)}',
                 'status': 'finished',
-                'movie': m.title,
+                'movie': movie.title,
                 'mode': mode,
+                'server': server_id,
                 'progress': {
                     'phase': 'cached',
                     'percent': 100,
-                    'movie': m.title,
+                    'movie': movie.title,
                     'cancellable': False,
                     'mode': mode,
                 },
                 'result': cached_result,
             }
         job = self.q.enqueue_call(
-            self.cutter.analyze_recording,
-            args=(mm, mode),
+            ctx['cutter'].analyze_recording,
+            args=(movie_data, mode),
             timeout=self.analysis_timeout,
         )
+        job.meta['server_id'] = server_id
+        job.meta['job_kind'] = 'analysis'
+        job.save_meta()
         return {
             'job_id': job.id,
             'status': job.get_status(refresh=True),
-            'movie': m.title,
+            'movie': movie.title,
             'mode': mode,
+            'server': server_id,
         }
 
     async def _analysis_status(self, job_id):
-        if self.plex is None:
-            raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
         job = Job.fetch(job_id, connection=self.redis_connection)
         status = job.get_status(refresh=True)
         payload = {
             'job_id': job.id,
             'status': status,
+            'server': job.meta.get('server_id', self._active_server_id),
         }
         analysis_meta = job.meta.get('analysis', {}) if hasattr(job, 'meta') else {}
         if analysis_meta:
@@ -591,8 +777,6 @@ class Plexdata:
         return payload
 
     async def _cancel_analysis(self, job_id):
-        if self.plex is None:
-            raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
         job = Job.fetch(job_id, connection=self.redis_connection)
         status = job.get_status(refresh=True)
         analysis_meta = job.meta.get('analysis', {}) if hasattr(job, 'meta') else {}
@@ -602,6 +786,7 @@ class Plexdata:
                 'job_id': job.id,
                 'status': 'cancelled' if status == 'canceled' else status,
                 'movie': movie_title,
+                'server': job.meta.get('server_id', self._active_server_id),
             }
         if status == 'queued':
             job.cancel()
@@ -609,6 +794,7 @@ class Plexdata:
                 'job_id': job.id,
                 'status': 'cancelled',
                 'movie': movie_title,
+                'server': job.meta.get('server_id', self._active_server_id),
             }
         job.meta['analysis'] = {
             **analysis_meta,
@@ -623,112 +809,96 @@ class Plexdata:
             'job_id': job.id,
             'status': 'cancelling',
             'movie': movie_title,
+            'server': job.meta.get('server_id', self._active_server_id),
             'progress': job.meta['analysis'],
         }
-        
+
+    def _job_server_id(self, job):
+        return job.meta.get('server_id', self._active_server_id)
+
+    def _job_matches_active_server(self, job):
+        return self._job_server_id(job) == self._active_server_id
+
     async def _doProgress(self):
-        if self.plex is not None:
-            mstatus = {
-                'title': '-',
-                'cut_progress': 0,
-                'cut_phase': '',
-                'apsc_progress': 0,
-                'started': 0,
-                'status': 'idle'
-            } 
-            workers = Worker.all(connection=self.redis_connection)
-            worker = workers[0] if len(workers) > 0 else None
-            if worker:
-                lhb = pytz.utc.localize(worker.last_heartbeat)
-                lhbtz = lhb.astimezone(pytz.timezone("Europe/Vienna"))
-                w = {
-                    'name': worker.name,
-                    'state': worker.state,
-                    'last_heartbeat': lhbtz.strftime("%H:%M:%S"),
-                    'current_job_id': worker.get_current_job_id(),
-                    'failed': worker.failed_job_count
-                } 
-            else:
-                w = {
-                    'status':'no worker detected'
-                }
-            qd = {
-                'started':self.q.started_job_registry.count,
-                'finished':self.q.finished_job_registry.count,
-                'failed':self.q.failed_job_registry.count,
+        self._ensure_active_server(require_online=False)
+        mstatus = {
+            'title': '-',
+            'cut_progress': 0,
+            'cut_phase': '',
+            'apsc_progress': 0,
+            'started': 0,
+            'status': 'idle'
+        }
+        workers = Worker.all(connection=self.redis_connection)
+        worker = workers[0] if len(workers) > 0 else None
+        if worker and worker.last_heartbeat:
+            lhb = pytz.utc.localize(worker.last_heartbeat)
+            lhbtz = lhb.astimezone(pytz.timezone('Europe/Vienna'))
+            _worker_status = {
+                'name': worker.name,
+                'state': worker.state,
+                'last_heartbeat': lhbtz.strftime('%H:%M:%S'),
+                'current_job_id': worker.get_current_job_id(),
+                'failed': worker.failed_job_count
             }
-            if self.q.started_job_registry.count > 0:
-                qd['started_jobs'] = []
-                for job_id in self.q.started_job_registry.get_job_ids():
-                    job = Job.fetch(job_id, connection=self.redis_connection)
-                    m = self.plex.MovieData(job.args[0])
-                    cut_meta = job.meta.get('cut', {})
-                    prog = cut_meta.get('percent')
-                    if prog is None:
-                        prog = self.cutter._movie_stats(*job.args)
-                    apsc_prog = self.cutter._apsc_stats(*job.args)
-                    #apsc_size = plexdata.cutter._apsc_size(m)
-                    d = {
-                        'title': m.title,
-                        'ss':job.args[1],
-                        'to':job.args[2],
-                        'name': job_id,
-                        'status':job.get_status(refresh=True),
-                        'cut_progress':prog,
-                        'cut_phase': cut_meta.get('phase', ''),
-                        'apsc_progress':apsc_prog
-                    }
-                    qd['started_jobs'].append(d)
-                    mstatus.update({
-                        'title': m.title,
-                        #'apsc_size': apsc_size,
-                        'cut_progress': prog,
-                        'cut_phase': cut_meta.get('phase', ''),
-                        'apsc_progress':apsc_prog,
-                        'started': self.q.started_job_registry.count,
-                        'status': d['status']           
-                    })
-
-            if self.q.started_job_registry.count == 0:
-                refresh_status = self._poll_post_cut_refresh()
-                if refresh_status is not None:
-                    return refresh_status
-
-                finished_cut_job = None
-                if self.q.finished_job_registry.count > 0:
-                    for job_id in reversed(self.q.finished_job_registry.get_job_ids()):
-                        if job_id in self._processed_finished_cut_jobs:
-                            continue
-                        job = Job.fetch(job_id, connection=self.redis_connection)
-                        if getattr(job, 'func_name', '').endswith('.cut'):
-                            ended_at = getattr(job, 'ended_at', None)
-                            if ended_at is not None and (time.time() - ended_at.timestamp()) > 300:
-                                self._processed_finished_cut_jobs.add(job_id)
-                                continue
-                            finished_cut_job = job
-                            break
-                if finished_cut_job is not None:
-                    refresh_state = self._start_post_cut_refresh(finished_cut_job)
-                    if refresh_state is not None:
-                        return {
-                            'title': refresh_state['title'],
-                            'cut_progress': 100,
-                            'cut_phase': 'plex analyze',
-                            'apsc_progress': 0,
-                            'started': 1,
-                            'status': 'started',
-                        }
-
-            if self.q.finished_job_registry.count > 0:
-                qd['finished_jobs'] = []
-                for job_id in self.q.finished_job_registry.get_job_ids():
-                    job = Job.fetch(job_id, connection=self.redis_connection)
-                    d = {
-                        'name': job_id,
-                        'result': job.result
-                    }
-                    qd['finished_jobs'].append(d) 
-
-            return mstatus
         else:
-            raise ValueError(f'Plex Server {self.cfg["fileserver"]} not available')
+            _worker_status = {
+                'status': 'no worker detected'
+            }
+
+        started_jobs = []
+        for job_id in self.q.started_job_registry.get_job_ids():
+            job = Job.fetch(job_id, connection=self.redis_connection)
+            if not self._job_matches_active_server(job):
+                continue
+            started_jobs.append(job)
+
+        if started_jobs:
+            for job in started_jobs:
+                cutter = self._servers.get(self._job_server_id(job), {}).get('cutter', self._active_cutter())
+                movie = job.args[0]
+                cut_meta = job.meta.get('cut', {})
+                progress = cut_meta.get('percent')
+                if progress is None:
+                    progress = cutter._movie_stats(*job.args)
+                apsc_progress = cutter._apsc_stats(*job.args)
+                mstatus.update({
+                    'title': movie.title,
+                    'cut_progress': progress,
+                    'cut_phase': cut_meta.get('phase', ''),
+                    'apsc_progress': apsc_progress,
+                    'started': len(started_jobs),
+                    'status': job.get_status(refresh=True),
+                })
+        else:
+            refresh_status = self._poll_post_cut_refresh(self._active_server_id)
+            if refresh_status is not None:
+                return refresh_status
+
+            finished_cut_job = None
+            for job_id in reversed(self.q.finished_job_registry.get_job_ids()):
+                if job_id in self._processed_finished_cut_jobs:
+                    continue
+                job = Job.fetch(job_id, connection=self.redis_connection)
+                if not self._job_matches_active_server(job):
+                    continue
+                if getattr(job, 'func_name', '').endswith('.cut'):
+                    ended_at = getattr(job, 'ended_at', None)
+                    if ended_at is not None and (time.time() - ended_at.timestamp()) > 300:
+                        self._processed_finished_cut_jobs.add(job_id)
+                        continue
+                    finished_cut_job = job
+                    break
+            if finished_cut_job is not None:
+                refresh_state = self._start_post_cut_refresh(finished_cut_job)
+                if refresh_state is not None:
+                    return {
+                        'title': refresh_state['title'],
+                        'cut_progress': 100,
+                        'cut_phase': 'plex analyze',
+                        'apsc_progress': 0,
+                        'started': 1,
+                        'status': 'started',
+                    }
+
+        return mstatus
