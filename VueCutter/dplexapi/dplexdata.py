@@ -116,20 +116,20 @@ class Plexdata:
                 'wolurl': '',
             }
 
-        url = os.getenv(f'VUECUTTER_PLEX_URL{suffix}', fallback['url'])
-        token = os.getenv(f'VUECUTTER_PLEX_TOKEN{suffix}', fallback['token'])
-        fileserver = os.getenv(f'VUECUTTER_FILESERVER{suffix}', fallback['fileserver'])
+        url = (os.getenv(f'VUECUTTER_PLEX_URL{suffix}', fallback['url']) or '').strip()
+        token = (os.getenv(f'VUECUTTER_PLEX_TOKEN{suffix}', fallback['token']) or '').strip()
+        fileserver = (os.getenv(f'VUECUTTER_FILESERVER{suffix}', fallback['fileserver']) or '').strip()
         if not (url and token and fileserver):
             return None
 
         return {
             'id': server_id,
-            'name': os.getenv(f'VUECUTTER_PLEX_NAME{suffix}', default_name),
+            'name': (os.getenv(f'VUECUTTER_PLEX_NAME{suffix}', '') or '').strip() or default_name,
             'url': url,
             'token': token,
             'fileserver': fileserver,
-            'fileservermac': os.getenv(f'VUECUTTER_FILESERVER_MAC{suffix}', fallback['fileservermac']),
-            'wolurl': os.getenv(f'VUECUTTER_WOL_URL{suffix}', fallback['wolurl']),
+            'fileservermac': (os.getenv(f'VUECUTTER_FILESERVER_MAC{suffix}', fallback['fileservermac']) or '').strip(),
+            'wolurl': (os.getenv(f'VUECUTTER_WOL_URL{suffix}', fallback['wolurl']) or '').strip(),
         }
 
     def _pick_active_server(self, preferred_server_id=None):
@@ -142,16 +142,26 @@ class Plexdata:
 
     def _probe_server(self, server_id):
         ctx = self._servers[server_id]
-        try:
-            conn = requests.head(ctx['config']['url'], timeout=2)
-            status_code = getattr(conn, 'status_code', None)
-            conn.close()
-            if status_code in (200, 401):
-                return 'online', ''
-            return 'offline', f'HTTP {status_code}'
-        except requests.exceptions.RequestException as exc:
-            message = str(exc) or 'connection failed'
-            return 'offline', message
+        headers = {
+            'X-Plex-Token': ctx['config']['token'],
+        }
+        attempts = (
+            ('HEAD', ctx['config']['url']),
+            ('GET', ctx['config']['url']),
+            ('GET', f"{ctx['config']['url'].rstrip('/')}/identity"),
+        )
+        last_reason = ''
+        for method, url in attempts:
+            try:
+                response = requests.request(method, url, headers=headers, timeout=3, allow_redirects=True)
+                status_code = getattr(response, 'status_code', None)
+                response.close()
+                if status_code is not None and status_code < 500:
+                    return 'online', ''
+                last_reason = f'{method} {url} -> HTTP {status_code}'
+            except requests.exceptions.RequestException as exc:
+                last_reason = str(exc) or f'{method} {url} failed'
+        return 'offline', last_reason or 'connection failed'
 
     def _initialize_server_selection(self, server_id, force=False):
         ctx = self._servers[server_id]
