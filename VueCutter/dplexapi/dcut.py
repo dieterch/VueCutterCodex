@@ -65,23 +65,12 @@ class CutterInterface:
 		else:
 			share,path,_ = self._path_plit(movie)
 			if self._media_root:
-				def build_folder(include_share: bool):
-					parts = [self._media_root]
-					if include_share and share:
-						parts.append(share)
-					if path:
-						parts.append(path)
-					return os.path.join(*parts) + "/"
-
-				primary = build_folder(self._media_keep_share)
-				if os.path.exists(primary):
-					return primary
-
-				fallback = build_folder(not self._media_keep_share)
-				if os.path.exists(fallback):
-					return fallback
-
-				return primary
+				# For host-mounted media, use the same path structure as SMB mounts
+				# but with _media_root as base instead of /mnt/
+				return self._media_root + "/" + path + ("/" if path else "")
+			else:
+				# SMB mount: use the old logic
+				return os.path.dirname(__file__) + "/mnt/" + path + ("/" if path else "")
 	def _pathname(self, movie):
 		"""
 		full path to the mounted movie file
