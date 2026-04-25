@@ -65,22 +65,24 @@ class CutterInterface:
 		else:
 			share,path,_ = self._path_plit(movie)
 			if self._media_root:
-				parts = [self._media_root]
-				if self._media_keep_share and share:
-					parts.append(share)
-				if path:
-					parts.append(path)
-				return os.path.join(*parts) + "/"
-			return os.path.dirname(__file__) + "/mnt/" + path + ("/" if path else "")	
+				def build_folder(include_share: bool):
+					parts = [self._media_root]
+					if include_share and share:
+						parts.append(share)
+					if path:
+						parts.append(path)
+					return os.path.join(*parts) + "/"
 
-	def _pathname(self,movie):
-		"""
-		path to the mounted movie file
-		"""
-		return self._foldername(movie) + self._filename(movie)		
+				primary = build_folder(self._media_keep_share)
+				if os.path.exists(primary):
+					return primary
 
-	def ensure_media(self, movie):
-		self.mount(movie)
+				fallback = build_folder(not self._media_keep_share)
+				if os.path.exists(fallback):
+					return fallback
+
+				return primary
+		return os.path.dirname(__file__) + "/mnt/" + path + ("/" if path else "")
 		path = self._pathname(movie)
 		if not os.path.exists(path):
 			raise MediaUnavailableError(path)
