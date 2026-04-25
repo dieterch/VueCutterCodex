@@ -5,6 +5,8 @@ type ServerState = {
   status: 'online' | 'offline'
   reason?: string
   selectable: boolean
+  mount_method?: string
+  media_root?: string
 }
 
 type SectionState = {

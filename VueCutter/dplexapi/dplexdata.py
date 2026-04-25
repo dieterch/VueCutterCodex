@@ -70,10 +70,15 @@ class Plexdata:
         self._servers = {}
         for server_cfg in self._load_server_configs():
             previous = previous_servers.get(server_cfg['id'], {})
+            prev_cutter = previous.get('cutter')
+            if prev_cutter and previous.get('config', {}).get('media_root') == server_cfg.get('media_root'):
+                cutter = prev_cutter
+            else:
+                cutter = CutterInterface(server_cfg['fileserver'], server_cfg.get('media_root', ''))
             self._servers[server_cfg['id']] = {
                 'config': server_cfg,
                 'plex': previous.get('plex'),
-                'cutter': previous.get('cutter') or CutterInterface(server_cfg['fileserver']),
+                'cutter': cutter,
                 'selection': previous.get('selection'),
                 'status': previous.get('status', 'offline'),
                 'reason': previous.get('reason', ''),
@@ -119,6 +124,7 @@ class Plexdata:
         url = (os.getenv(f'VUECUTTER_PLEX_URL{suffix}', fallback['url']) or '').strip()
         token = (os.getenv(f'VUECUTTER_PLEX_TOKEN{suffix}', fallback['token']) or '').strip()
         fileserver = (os.getenv(f'VUECUTTER_FILESERVER{suffix}', fallback['fileserver']) or '').strip()
+        media_root = (os.getenv(f'VUECUTTER_MEDIA_ROOT{suffix}', '') or '').strip()
         if not (url and token and fileserver):
             return None
 
@@ -130,6 +136,7 @@ class Plexdata:
             'fileserver': fileserver,
             'fileservermac': (os.getenv(f'VUECUTTER_FILESERVER_MAC{suffix}', fallback['fileservermac']) or '').strip(),
             'wolurl': (os.getenv(f'VUECUTTER_WOL_URL{suffix}', fallback['wolurl']) or '').strip(),
+            'media_root': media_root,
         }
 
     def _pick_active_server(self, preferred_server_id=None):
@@ -213,6 +220,7 @@ class Plexdata:
     def _server_summary(self, server_id):
         ctx = self._servers[server_id]
         reason = ctx['reason'].strip() if ctx['reason'] else ''
+        mount_method = 'host' if ctx['config'].get('media_root') else 'smb'
         return {
             'id': server_id,
             'name': ctx['config']['name'],
@@ -220,6 +228,8 @@ class Plexdata:
             'status': ctx['status'],
             'reason': reason,
             'selectable': ctx['status'] == 'online',
+            'mount_method': mount_method,
+            'media_root': ctx['config'].get('media_root', ''),
         }
 
     def _server_unavailable_message(self, server_id):

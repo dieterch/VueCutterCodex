@@ -216,7 +216,7 @@ If you explicitly want host-managed mounts instead of container-managed SMB moun
 In that case:
 
 - mount the NAS shares on the host yourself
-- set `VUECUTTER_MEDIA_ROOT=/media`
+- set `VUECUTTER_MEDIA_ROOT=/media` for the first Plex server, or `VUECUTTER_MEDIA_ROOT_2=/mnt/media` for the second Homelab Plex server
 - bind the host media root into the containers again
 
 This mode is more infrastructure-heavy and is not the recommended default for your environment.

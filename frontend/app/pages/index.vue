@@ -59,6 +59,17 @@ const serverItems = computed(() => (
 const activeServer = computed(() => (
   (selection.value?.servers ?? []).find((server) => server.id === selection.value?.server) ?? null
 ))
+const mountMethodText = computed(() => {
+  if (!activeServer.value?.mount_method) {
+    return ''
+  }
+  if (activeServer.value.mount_method === 'host') {
+    return activeServer.value.media_root
+      ? `Host mount ${activeServer.value.media_root}`
+      : 'Host mount'
+  }
+  return 'SMB/CIFS'
+})
 const safeTimelineItems = computed(() => timelineItems.value.filter((item) => item && item.label))
 const safeCutlist = computed(() => cutlist.value.filter((interval) => interval && interval.t0 && interval.t1))
 const safeAnalysisBoundaries = computed(() => analysisDraft.value?.boundaries ?? [])
@@ -504,6 +515,9 @@ async function reloadCurrentSection() {
                   </v-chip>
                   <v-chip size="small" variant="text" prepend-icon="mdi-movie-open-edit">
                     {{ positionString }} / {{ positionMinuteLabel }}
+                  </v-chip>
+                  <v-chip v-if="mountMethodText" size="small" variant="tonal" prepend-icon="mdi-link">
+                    {{ mountMethodText }}
                   </v-chip>
                   <v-text-field
                     v-model="positionString"

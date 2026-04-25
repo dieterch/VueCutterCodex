@@ -35,12 +35,14 @@ services:
       VUECUTTER_PLEX_URL_2: ${VUECUTTER_PLEX_URL_2:-}
       VUECUTTER_PLEX_TOKEN_2: ${VUECUTTER_PLEX_TOKEN_2:-}
       VUECUTTER_WOL_URL_2: ${VUECUTTER_WOL_URL_2:-}
+      VUECUTTER_MEDIA_ROOT_2: ${VUECUTTER_MEDIA_ROOT_2:-}
     ports:
       - "${VUECUTTER_BACKEND_PORT:-5200}:5200"
     volumes:
       - ./VueCutter:/app
       - ./docker:/app/docker
       - ${HOST_CONFIG_PATH:-./VueCutter/config.toml}:/app/config.toml:ro
+      - /mnt/media:/mnt/media
       - type: bind
         source: /etc/smbcredentials
         target: /etc/smbcredentials
@@ -77,10 +79,12 @@ services:
       VUECUTTER_PLEX_URL_2: ${VUECUTTER_PLEX_URL_2:-}
       VUECUTTER_PLEX_TOKEN_2: ${VUECUTTER_PLEX_TOKEN_2:-}
       VUECUTTER_WOL_URL_2: ${VUECUTTER_WOL_URL_2:-}
+      VUECUTTER_MEDIA_ROOT_2: ${VUECUTTER_MEDIA_ROOT_2:-}
     volumes:
       - ./VueCutter:/app
       - ./docker:/app/docker
       - ${HOST_CONFIG_PATH:-./VueCutter/config.toml}:/app/config.toml:ro
+      - /mnt/media:/mnt/media
       - type: bind
         source: /etc/smbcredentials
         target: /etc/smbcredentials
