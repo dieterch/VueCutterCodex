@@ -82,11 +82,19 @@ class CutterInterface:
 					return fallback
 
 				return primary
-		return os.path.dirname(__file__) + "/mnt/" + path + ("/" if path else "")
+	def _pathname(self, movie):
+		"""
+		full path to the mounted movie file
+		"""
+		return self._foldername(movie) + self._filename(movie)
+
+	def ensure_media(self, movie):
+		"""
+		ensure the media file exists, raise MediaUnavailableError if not
+		"""
 		path = self._pathname(movie)
 		if not os.path.exists(path):
 			raise MediaUnavailableError(path)
-		return path
 
 	def _cutfilename(self,movie):
 		"""
