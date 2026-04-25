@@ -71,10 +71,17 @@ class Plexdata:
         for server_cfg in self._load_server_configs():
             previous = previous_servers.get(server_cfg['id'], {})
             prev_cutter = previous.get('cutter')
-            if prev_cutter and previous.get('config', {}).get('media_root') == server_cfg.get('media_root'):
+            media_root = server_cfg.get('media_root', '')
+            # Only use media_root if the path exists (for host-mounted media)
+            if media_root and not os.path.exists(media_root):
+                media_root = ''
+            # Update config with the actual media_root being used
+            server_cfg = dict(server_cfg)
+            server_cfg['media_root'] = media_root
+            if prev_cutter and previous.get('config', {}).get('media_root') == media_root:
                 cutter = prev_cutter
             else:
-                cutter = CutterInterface(server_cfg['fileserver'], server_cfg.get('media_root', ''))
+                cutter = CutterInterface(server_cfg['fileserver'], media_root)
             self._servers[server_cfg['id']] = {
                 'config': server_cfg,
                 'plex': previous.get('plex'),
