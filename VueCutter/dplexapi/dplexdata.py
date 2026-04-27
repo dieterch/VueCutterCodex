@@ -38,7 +38,9 @@ class Plexdata:
         self.initial_movie_key = 0
         self.initial_series_key = 0
         self.initial_season_key = 0
-        self.server_status_ttl = float(os.getenv('VUECUTTER_SERVER_STATUS_TTL', '15'))
+        default_ttl = float(os.getenv('VUECUTTER_SERVER_STATUS_TTL', '15'))
+        self.server_status_ttl_online = float(os.getenv('VUECUTTER_SERVER_STATUS_TTL_ONLINE', str(default_ttl)))
+        self.server_status_ttl_offline = float(os.getenv('VUECUTTER_SERVER_STATUS_TTL_OFFLINE', '60'))
         self._processed_finished_cut_jobs = set()
         self._post_cut_refresh = {}
         self._active_server_id = None
@@ -180,10 +182,12 @@ class Plexdata:
         return 'offline', last_reason or 'connection failed'
 
     def _server_status_stale(self, server_id):
+        ctx = self._servers[server_id]
         checked_at = self._servers[server_id].get('checked_at', 0.0)
         if checked_at <= 0:
             return True
-        return (time.time() - checked_at) >= self.server_status_ttl
+        ttl = self.server_status_ttl_online if ctx.get('status') == 'online' else self.server_status_ttl_offline
+        return (time.time() - checked_at) >= ttl
 
     def _initialize_server_selection(self, server_id, force=False):
         ctx = self._servers[server_id]
@@ -472,6 +476,7 @@ class Plexdata:
         return buffer
 
     def get_selection(self):
+        self.refresh_server_statuses(eager=False)
         server_id, ctx = self._ensure_active_server(require_online=False)
         if ctx['status'] == 'online':
             self._initialize_server_selection(server_id, force=False)
