@@ -38,6 +38,7 @@ class Plexdata:
         self.initial_movie_key = 0
         self.initial_series_key = 0
         self.initial_season_key = 0
+        self.server_status_ttl = float(os.getenv('VUECUTTER_SERVER_STATUS_TTL', '15'))
         self._processed_finished_cut_jobs = set()
         self._post_cut_refresh = {}
         self._active_server_id = None
@@ -89,9 +90,10 @@ class Plexdata:
                 'selection': previous.get('selection'),
                 'status': previous.get('status', 'offline'),
                 'reason': previous.get('reason', ''),
+                'checked_at': previous.get('checked_at', 0.0),
             }
 
-        self.refresh_server_statuses(eager=False)
+        self.refresh_server_statuses(eager=False, force=True)
         self._active_server_id = self._pick_active_server(previous_active)
 
     def _load_server_configs(self):
@@ -177,6 +179,12 @@ class Plexdata:
                 last_reason = str(exc) or f'{method} {url} failed'
         return 'offline', last_reason or 'connection failed'
 
+    def _server_status_stale(self, server_id):
+        checked_at = self._servers[server_id].get('checked_at', 0.0)
+        if checked_at <= 0:
+            return True
+        return (time.time() - checked_at) >= self.server_status_ttl
+
     def _initialize_server_selection(self, server_id, force=False):
         ctx = self._servers[server_id]
         if ctx['status'] != 'online':
@@ -201,11 +209,21 @@ class Plexdata:
             ctx['reason'] = str(exc)
             raise RuntimeError(self._server_unavailable_message(server_id))
 
-    def refresh_server_statuses(self, eager=False):
-        for server_id, ctx in self._servers.items():
+    def refresh_server_statuses(self, eager=False, force=False, server_ids=None):
+        target_ids = server_ids or list(self._servers.keys())
+        for server_id in target_ids:
+            ctx = self._servers[server_id]
+            if not force and not self._server_status_stale(server_id):
+                if eager and ctx['status'] == 'online' and (ctx['plex'] is None or ctx['selection'] is None):
+                    try:
+                        self._initialize_server_selection(server_id, force=ctx['selection'] is None)
+                    except RuntimeError:
+                        pass
+                continue
             status, reason = self._probe_server(server_id)
             ctx['status'] = status
             ctx['reason'] = reason
+            ctx['checked_at'] = time.time()
             if status == 'online':
                 if eager and (ctx['plex'] is None or ctx['selection'] is None):
                     try:
@@ -216,8 +234,8 @@ class Plexdata:
                 ctx['plex'] = None
                 ctx['selection'] = None
 
-    def server_statuses(self):
-        self.refresh_server_statuses(eager=False)
+    def server_statuses(self, force=False):
+        self.refresh_server_statuses(eager=False, force=force)
         return [self._server_summary(server_id) for server_id in self._servers]
 
     def hostalive(self) -> bool:
@@ -365,7 +383,7 @@ class Plexdata:
             self._active_server_id = self._pick_active_server()
         if self._active_server_id is None:
             raise RuntimeError('Plex server unavailable: no Plex server configured.')
-        self.refresh_server_statuses(eager=False)
+        self.refresh_server_statuses(eager=False, force=force_reload, server_ids=[self._active_server_id])
         ctx = self._servers[self._active_server_id]
         if ctx['status'] == 'online':
             self._initialize_server_selection(self._active_server_id, force=force_reload)
@@ -394,7 +412,7 @@ class Plexdata:
     def select_server(self, server_id):
         if server_id not in self._servers:
             raise ValueError(f"Unknown Plex server '{server_id}'.")
-        self.refresh_server_statuses(eager=False)
+        self.refresh_server_statuses(eager=False, force=True, server_ids=[server_id])
         if self._servers[server_id]['status'] != 'online':
             raise RuntimeError(self._server_unavailable_message(server_id))
         self._active_server_id = server_id
