@@ -119,12 +119,13 @@ class MyPlexServer(PlexServer):
 class PlexInterface:
 
     class MovieData():
-        def __init__(self, movie):
+        def __init__(self, movie, mount_context=None):
             self.title = movie.title
             self.locations = movie.locations 
             self.duration = movie.duration
             self.summary = movie.summary
             self.ratingKey = getattr(movie, 'ratingKey', None)
+            self.mount_context = mount_context or {}
 
         def __iter__(self):
             yield from {
@@ -133,6 +134,7 @@ class PlexInterface:
                 "duration": self.duration,
                 "summary": self.summary,
                 "ratingKey": self.ratingKey,
+                "mount_context": self.mount_context,
             }.items()
 
         def __str__(self):

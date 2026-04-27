@@ -302,6 +302,25 @@ class Plexdata:
             raise ValueError('Unknown Plex section type.')
         return selection
 
+    def _movie_mount_context(self, server_id, movie):
+        ctx = self._servers[server_id]
+        share, relative_folder, _ = ctx['cutter']._path_plit(movie)
+        media_root = ctx['config'].get('media_root', '')
+        return {
+            'server_id': server_id,
+            'mount_mode': 'bind' if media_root else 'smb',
+            'fileserver': ctx['config']['fileserver'],
+            'media_root': media_root,
+            'share': share,
+            'relative_folder': relative_folder,
+            'mount_target': ctx['cutter'].MOUNT_TARGET,
+            'source_path': movie.locations[0] if getattr(movie, 'locations', None) else '',
+        }
+
+    def _movie_data(self, server_id, movie):
+        ctx = self._servers[server_id]
+        return ctx['plex'].MovieData(movie, mount_context=self._movie_mount_context(server_id, movie))
+
     def _selection_payload(self, server_id):
         base = {
             'server': server_id,
@@ -599,7 +618,7 @@ class Plexdata:
         movie = await self._update_movie(movie_name)
         ctx['cutter'].ensure_media(movie)
         try:
-            movie_data = ctx['plex'].MovieData(movie)
+            movie_data = self._movie_data(server_id, movie)
             print("will cut now:\n", f"Queue Cut From server '{server_id}', section '{section}', cut '{movie.title}', cutlist{cutlist}, inplace={inplace}, engine=ffmpeg")
             job = self.q.enqueue_call(ctx['cutter'].cut, args=(movie_data, cutlist, inplace))
             job.meta['server_id'] = server_id
@@ -742,7 +761,7 @@ class Plexdata:
             await self._update_season(season_name)
         movie = await self._update_movie(movie_name)
         ctx['cutter'].ensure_media(movie)
-        movie_data = ctx['plex'].MovieData(movie)
+        movie_data = self._movie_data(server_id, movie)
         cached_result = ctx['cutter']._cached_analysis(movie_data, mode)
         if cached_result is not None:
             return {

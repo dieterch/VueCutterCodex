@@ -20,6 +20,8 @@ class AnalysisCancelledError(RuntimeError):
 	pass
 
 class CutterInterface:
+	MOUNT_TARGET = os.path.dirname(__file__) + "/mnt"
+
 	def __init__(self, server, media_root=None):
 		self._server = server
 		self._ffmpeg_binary = '/usr/bin/ffmpeg'
@@ -28,6 +30,9 @@ class CutterInterface:
 		self._analysis_cache = {}
 		self.last_movie = ""
 		self.target = ""
+		self._mounted_target = ""
+		self._mounted_source = ""
+		self._mounted_mode = ""
 
 	def _long_runtask(self, delay):
 		time.sleep(delay)
@@ -38,6 +43,56 @@ class CutterInterface:
 		folder = "/".join(hlp[3:-1])
 		file = hlp[-1]
 		return (share, folder, file)
+
+	def _default_mount_context(self, movie):
+		share, folder, _ = self._path_plit(movie)
+		mount_mode = 'bind' if self._media_root else 'smb'
+		return {
+			'mount_mode': mount_mode,
+			'fileserver': self._server,
+			'media_root': self._media_root,
+			'share': share,
+			'relative_folder': folder,
+			'mount_target': self.MOUNT_TARGET,
+			'source_path': movie.locations[0] if getattr(movie, 'locations', None) else '',
+		}
+
+	def _mount_context(self, movie):
+		context = getattr(movie, 'mount_context', None) or {}
+		defaults = self._default_mount_context(movie)
+		merged = {**defaults, **context}
+		merged['mount_mode'] = (merged.get('mount_mode') or defaults['mount_mode']).strip()
+		merged['fileserver'] = (merged.get('fileserver') or defaults['fileserver']).strip()
+		merged['media_root'] = (merged.get('media_root') or defaults['media_root']).rstrip('/')
+		merged['share'] = (merged.get('share') or defaults['share']).strip('/')
+		merged['relative_folder'] = (merged.get('relative_folder') or defaults['relative_folder']).strip('/')
+		merged['mount_target'] = (merged.get('mount_target') or defaults['mount_target']).rstrip('/')
+		return merged
+
+	def _mount_target(self, movie):
+		return self._mount_context(movie)['mount_target']
+
+	def _mount_mode(self, movie):
+		return self._mount_context(movie)['mount_mode']
+
+	def _mount_source(self, movie):
+		context = self._mount_context(movie)
+		share = context['share']
+		if context['mount_mode'] == 'bind':
+			if not context['media_root']:
+				raise ValueError('Bind mount mode requires a media_root.')
+			return os.path.join(context['media_root'], share)
+		return f"//{context['fileserver']}/{share}"
+
+	def _mount_is_current(self, movie):
+		target = self._mount_target(movie)
+		source = self._mount_source(movie)
+		mode = self._mount_mode(movie)
+		return (
+			self._mounted_target == target and
+			self._mounted_source == source and
+			self._mounted_mode == mode
+		)
 
 	def _call(self, exc_lst):
 		try:
@@ -63,14 +118,9 @@ class CutterInterface:
 		if len(movie.locations) > 1:
 			raise ValueError('cannot handle multiple Files in movie folder')
 		else:
-			share,path,_ = self._path_plit(movie)
-			if self._media_root:
-				# For host-mounted media, use the same path structure as SMB mounts
-				# but with _media_root as base instead of /mnt/
-				return self._media_root + "/" + path + ("/" if path else "")
-			else:
-				# SMB mount: use the old logic
-				return os.path.dirname(__file__) + "/mnt/" + path + ("/" if path else "")
+			_, path, _ = self._path_plit(movie)
+			base = self._mount_target(movie)
+			return base + "/" + path + ("/" if path else "")
 	def _pathname(self, movie):
 		"""
 		full path to the mounted movie file
@@ -156,42 +206,44 @@ class CutterInterface:
 		return 100
 
 	def mount(self, movie):
-		if self._media_root:
-			return None
 		if len(movie.locations) > 1:
 			raise ValueError('cannot cut multiple Files in movie folder')
+		context = self._mount_context(movie)
+		target = context['mount_target']
+		source = self._mount_source(movie)
+		mode = context['mount_mode']
+		if mode == 'bind':
+			mount_lst = ["mount", "--bind", source, target]
 		else:
-			share, path, file = self._path_plit(movie)
-			source = f"//{self._server}/{share}"
-			target = os.path.dirname(__file__) + "/mnt/"
-			mount_lst = ["mount","-t","cifs", "-o", "credentials=/etc/smbcredentials", f"{source}", f"{target}"]
+			mount_lst = ["mount", "-t", "cifs", "-o", "credentials=/etc/smbcredentials", source, target]
+		os.makedirs(target, exist_ok=True)
 		try:
-			if not os.path.exists(self._pathname(movie)):
-				# beim ersten mount oder wenn die section sich ändert ...
-				print('******remounting necessary')				
-				try:
-					self.umount()
-				except subprocess.CalledProcessError as e:
-					print(f'***** neglecting error by intention ****')
-
-				res = subprocess.check_output(mount_lst)
-				print(f"{source} mounted.")
-				return res
-			else:
-				pass
-				#print('******no mounting needed')
+			if self._mount_is_current(movie) and os.path.exists(self._pathname(movie)):
+				return None
+			print('******remounting necessary')
+			try:
+				self.umount(movie)
+			except subprocess.CalledProcessError:
+				print('***** neglecting error by intention ****')
+			res = subprocess.check_output(mount_lst)
+			self._mounted_target = target
+			self._mounted_source = source
+			self._mounted_mode = mode
+			print(f"{source} mounted on {target}.")
+			return res
 		except subprocess.CalledProcessError as e:
 			print(str(e))
 			raise e
 
-	def umount(self):
-		if self._media_root:
-			return None
-		target = os.path.dirname(__file__) + "/mnt/"
+	def umount(self, movie=None):
+		target = self._mount_target(movie) if movie is not None else (self._mounted_target or self.MOUNT_TARGET)
 		umount_lst = ["umount","-l",f"{target}"]		
 		try:
 			res = subprocess.check_output(umount_lst)
 			print(f"{target} unmounted.")
+			self._mounted_target = ""
+			self._mounted_source = ""
+			self._mounted_mode = ""
 			return res
 		except subprocess.CalledProcessError as e:
 			print(str(e))
