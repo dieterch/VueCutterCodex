@@ -81,7 +81,10 @@ class CutterInterface:
 		if context['mount_mode'] == 'bind':
 			if not context['media_root']:
 				raise ValueError('Bind mount mode requires a media_root.')
-			return os.path.join(context['media_root'], share)
+			share_root = os.path.join(context['media_root'], share)
+			if os.path.exists(share_root):
+				return share_root
+			return context['media_root']
 		return f"//{context['fileserver']}/{share}"
 
 	def _mount_is_current(self, movie):
