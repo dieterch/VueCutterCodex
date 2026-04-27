@@ -81,6 +81,7 @@ class CutterInterface:
 		"""
 		ensure the media file exists, raise MediaUnavailableError if not
 		"""
+		self.mount(movie)
 		path = self._pathname(movie)
 		if not os.path.exists(path):
 			raise MediaUnavailableError(path)
