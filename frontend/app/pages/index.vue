@@ -64,11 +64,9 @@ const mountMethodText = computed(() => {
     return ''
   }
   if (activeServer.value.mount_method === 'host') {
-    return activeServer.value.media_root
-      ? `Host mount ${activeServer.value.media_root}`
-      : 'Host mount'
+    return 'Host'
   }
-  return 'SMB/CIFS'
+  return 'SMB'
 })
 const safeTimelineItems = computed(() => timelineItems.value.filter((item) => item && item.label))
 const safeCutlist = computed(() => cutlist.value.filter((interval) => interval && interval.t0 && interval.t1))
@@ -516,7 +514,7 @@ async function reloadCurrentSection() {
                   <v-chip size="small" variant="text" prepend-icon="mdi-movie-open-edit">
                     {{ positionString }} / {{ positionMinuteLabel }}
                   </v-chip>
-                  <v-chip v-if="mountMethodText" size="small" variant="tonal" prepend-icon="mdi-link">
+                  <v-chip v-if="mountMethodText" size="small" variant="tonal" prepend-icon="mdi-link" class="mount-chip">
                     {{ mountMethodText }}
                   </v-chip>
                   <v-text-field
@@ -944,8 +942,14 @@ async function reloadCurrentSection() {
   align-items: center;
 }
 
+.preview-toolbar > * {
+  min-width: 0;
+}
+
 .position-field {
-  max-width: 150px;
+  flex: 1 1 150px;
+  min-width: 150px;
+  max-width: 180px;
 }
 
 .movie-meta {
@@ -956,7 +960,7 @@ async function reloadCurrentSection() {
 
 .timeline-strip {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  grid-template-columns: repeat(9, minmax(0, 1fr));
   gap: 0;
   overflow: hidden;
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
@@ -970,6 +974,7 @@ async function reloadCurrentSection() {
   display: flex;
   flex-direction: column;
   cursor: pointer;
+  min-width: 0;
 }
 
 .timeline-item:disabled {
@@ -981,6 +986,10 @@ async function reloadCurrentSection() {
   width: 100%;
   border-radius: 0;
   display: block;
+}
+
+.mount-chip {
+  flex: 0 0 auto;
 }
 
 .rail-columns {
@@ -1096,6 +1105,24 @@ async function reloadCurrentSection() {
 
   .analysis-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) and (orientation: portrait) {
+  .preview-toolbar {
+    gap: 6px;
+  }
+
+  .position-field {
+    order: -1;
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .timeline-item img {
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
   }
 }
 </style>
