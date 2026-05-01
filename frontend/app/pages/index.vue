@@ -187,10 +187,18 @@ async function pageTimeline(direction: -1 | 1) {
 }
 
 function setCutStart() {
+  if (timelineEnabled.value) {
+    timelineEnabled.value = false
+    timelineItems.value = []
+  }
   cutStart.value = positionString.value
 }
 
 function setCutEnd() {
+  if (timelineEnabled.value) {
+    timelineEnabled.value = false
+    timelineItems.value = []
+  }
   cutEnd.value = positionString.value
 }
 
