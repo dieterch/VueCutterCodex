@@ -413,9 +413,23 @@ class Plexdata:
             return self._servers[self._active_server_id]['config']['name']
         return 'Plex server'
 
+    def _release_server_mount(self, server_id):
+        if not server_id or server_id not in self._servers:
+            return
+        cutter = self._servers[server_id].get('cutter')
+        if cutter is None:
+            return
+        try:
+            cutter.umount()
+        except subprocess.CalledProcessError:
+            pass
+
     def select_server(self, server_id):
         if server_id not in self._servers:
             raise ValueError(f"Unknown Plex server '{server_id}'.")
+        previous_server_id = self._active_server_id
+        if previous_server_id and previous_server_id != server_id:
+            self._release_server_mount(previous_server_id)
         self.refresh_server_statuses(eager=False, force=True, server_ids=[server_id])
         if self._servers[server_id]['status'] != 'online':
             raise RuntimeError(self._server_unavailable_message(server_id))

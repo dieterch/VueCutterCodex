@@ -219,7 +219,11 @@ class CutterInterface:
 			mount_lst = ["mount", "--bind", source, target]
 		else:
 			mount_lst = ["mount", "-t", "cifs", "-o", "credentials=/etc/smbcredentials", source, target]
-		os.makedirs(target, exist_ok=True)
+		try:
+			os.makedirs(target, exist_ok=True)
+		except FileExistsError:
+			if not os.path.isdir(target):
+				raise RuntimeError(f"Mount target '{target}' exists but is not a directory.")
 		try:
 			if self._mount_is_current(movie) and os.path.exists(self._pathname(movie)):
 				return None
