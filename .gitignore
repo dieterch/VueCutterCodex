@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+VueCutter/servers.json
 
 node_modules/
 frontend/node_modules/

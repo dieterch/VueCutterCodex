@@ -12,10 +12,26 @@ Installation
 ------------
 To configure this application, you have to create a **config.toml** file in the same directory as this file with the following content:
 :: 
-  fileserver = 'xx.xx.xx.xx'
-  plexurl = 'http://xx.xx.xx.xx:32400'
-  plextoken = 'xxxxxxxxxxxxxxxxxx'
   redispw = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+::
+
+Copy **servers.example.json** to **servers.json** in the same directory for Plex server definitions:
+::
+  cp servers.example.json servers.json
+::
+
+Then edit **servers.json**:
+::
+  [
+    {
+      "id": "plex1",
+      "name": "Main Plex",
+      "url": "http://xx.xx.xx.xx:32400",
+      "token": "xxxxxxxxxxxxxxxxxx",
+      "fileserver": "xx.xx.xx.xx",
+      "media_root": ""
+    }
+  ]
 ::
 
 Software:

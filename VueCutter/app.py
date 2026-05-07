@@ -19,7 +19,6 @@ from quart_cors import cors
 import subprocess
 import time
 from dplexapi.dplexdata import Plexdata
-import wakeonlan
 
 # overwrite jinja2 delimiters to avoid conflict with vue delimiters, was previosly used by me (Dieter Chvatal)
 # in order to transfer information from the backend to the frontend, while the frontend does not know its host ip address.
@@ -393,16 +392,6 @@ async def api_progress():
 async def doexit():
     os.kill(os.getpid(), signal.SIGTERM)
     return redirect(url_for('index'))    
-
-@app.route('/wakeonlan')
-async def dowakeonlan():
-    wakeonlan.send_magic_packet(plexdata.cfg['fileservermac'])
-    return redirect(url_for('index'))
-
-@app.route('/wolserver')
-async def dowolserver():
-    res = plexdata.wolserver()
-    return redirect(url_for('index'))
 
 # deliver the vuetify frontend
 @app.route("/")

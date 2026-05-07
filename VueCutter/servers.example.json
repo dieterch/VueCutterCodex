@@ -1,0 +1,26 @@
+[
+  {
+    "id": "plex1",
+    "name": "Main Plex",
+    "url": "http://192.168.15.10:32400",
+    "token": "replace-me",
+    "fileserver": "192.168.15.10",
+    "media_root": ""
+  },
+  {
+    "id": "plex2",
+    "name": "Homelab Plex",
+    "url": "http://192.168.15.95:32400",
+    "token": "replace-me-too",
+    "fileserver": "192.168.15.95",
+    "media_root": ""
+  },
+  {
+    "id": "plex3",
+    "name": "Third Plex",
+    "url": "http://192.168.15.191:32400",
+    "token": "replace-me-three",
+    "fileserver": "replace-with-third-smb-host",
+    "media_root": ""
+  }
+]

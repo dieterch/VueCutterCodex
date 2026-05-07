@@ -25,7 +25,7 @@ class CutterInterface:
 	def __init__(self, server, media_root=None):
 		self._server = server
 		self._ffmpeg_binary = '/usr/bin/ffmpeg'
-		self._media_root = (media_root or os.getenv('VUECUTTER_MEDIA_ROOT', '')).rstrip('/')
+		self._media_root = (media_root or '').rstrip('/')
 		self._media_keep_share = os.getenv('VUECUTTER_MEDIA_KEEP_SHARE', 'true').lower() != 'false'
 		self._analysis_cache = {}
 		self.last_movie = ""

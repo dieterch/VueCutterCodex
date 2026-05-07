@@ -5,14 +5,9 @@ from redis.exceptions import ConnectionError
 from rq import Connection, Queue, Worker
 import tomllib
 
-from dplexapi.dcut import CutterInterface
-
 config_path = os.getenv('PLEXDATA_CONFIG', 'config.toml')
 with open(config_path, mode="rb") as fp:
     cfg = tomllib.load(fp)
-
-fileserver = os.getenv('VUECUTTER_FILESERVER', cfg['fileserver'])
-cutter = CutterInterface(fileserver)
 
 redis_host = os.getenv('REDIS_HOST', 'redis' if os.getenv('IN_DOCKER') == 'true' else 'localhost')
 redis_port = int(os.getenv('REDIS_PORT', '6379'))

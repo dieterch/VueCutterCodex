@@ -17,31 +17,19 @@ services:
     environment:
       IN_DOCKER: "true"
       PLEXDATA_CONFIG: /app/config.toml
+      PLEX_SERVERS_CONFIG: /app/servers.json
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       VUECUTTER_REDIS_PASSWORD: ${REDIS_PASSWORD}
-      VUECUTTER_MEDIA_ROOT: ${VUECUTTER_MEDIA_ROOT:-}
       VUECUTTER_MEDIA_KEEP_SHARE: ${VUECUTTER_MEDIA_KEEP_SHARE:-true}
-      VUECUTTER_FILESERVER: ${VUECUTTER_FILESERVER:-}
-      VUECUTTER_FILESERVER_MAC: ${VUECUTTER_FILESERVER_MAC:-}
-      VUECUTTER_PLEX_NAME: ${VUECUTTER_PLEX_NAME:-}
-      VUECUTTER_PLEX_URL: ${VUECUTTER_PLEX_URL:-}
-      VUECUTTER_PLEX_TOKEN: ${VUECUTTER_PLEX_TOKEN:-}
-      VUECUTTER_WOL_URL: ${VUECUTTER_WOL_URL:-}
-      VUECUTTER_FILESERVER_2: ${VUECUTTER_FILESERVER_2:-}
-      VUECUTTER_FILESERVER_MAC_2: ${VUECUTTER_FILESERVER_MAC_2:-}
-      VUECUTTER_PLEX_NAME_2: ${VUECUTTER_PLEX_NAME_2:-}
-      VUECUTTER_PLEX_URL_2: ${VUECUTTER_PLEX_URL_2:-}
-      VUECUTTER_PLEX_TOKEN_2: ${VUECUTTER_PLEX_TOKEN_2:-}
-      VUECUTTER_WOL_URL_2: ${VUECUTTER_WOL_URL_2:-}
-      VUECUTTER_MEDIA_ROOT_2: ${VUECUTTER_MEDIA_ROOT_2:-}
     ports:
       - "${VUECUTTER_BACKEND_PORT:-5200}:5200"
     volumes:
       - ./VueCutter:/app
       - ./docker:/app/docker
       - ${HOST_CONFIG_PATH:-./VueCutter/config.toml}:/app/config.toml:ro
+      - ${HOST_SERVERS_PATH:-./VueCutter/servers.json}:/app/servers.json:ro
       - /mnt/media:/mnt/media
       - type: bind
         source: /etc/smbcredentials
@@ -61,29 +49,17 @@ services:
     environment:
       IN_DOCKER: "true"
       PLEXDATA_CONFIG: /app/config.toml
+      PLEX_SERVERS_CONFIG: /app/servers.json
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       VUECUTTER_REDIS_PASSWORD: ${REDIS_PASSWORD}
-      VUECUTTER_MEDIA_ROOT: ${VUECUTTER_MEDIA_ROOT:-}
       VUECUTTER_MEDIA_KEEP_SHARE: ${VUECUTTER_MEDIA_KEEP_SHARE:-true}
-      VUECUTTER_FILESERVER: ${VUECUTTER_FILESERVER:-}
-      VUECUTTER_FILESERVER_MAC: ${VUECUTTER_FILESERVER_MAC:-}
-      VUECUTTER_PLEX_NAME: ${VUECUTTER_PLEX_NAME:-}
-      VUECUTTER_PLEX_URL: ${VUECUTTER_PLEX_URL:-}
-      VUECUTTER_PLEX_TOKEN: ${VUECUTTER_PLEX_TOKEN:-}
-      VUECUTTER_WOL_URL: ${VUECUTTER_WOL_URL:-}
-      VUECUTTER_FILESERVER_2: ${VUECUTTER_FILESERVER_2:-}
-      VUECUTTER_FILESERVER_MAC_2: ${VUECUTTER_FILESERVER_MAC_2:-}
-      VUECUTTER_PLEX_NAME_2: ${VUECUTTER_PLEX_NAME_2:-}
-      VUECUTTER_PLEX_URL_2: ${VUECUTTER_PLEX_URL_2:-}
-      VUECUTTER_PLEX_TOKEN_2: ${VUECUTTER_PLEX_TOKEN_2:-}
-      VUECUTTER_WOL_URL_2: ${VUECUTTER_WOL_URL_2:-}
-      VUECUTTER_MEDIA_ROOT_2: ${VUECUTTER_MEDIA_ROOT_2:-}
     volumes:
       - ./VueCutter:/app
       - ./docker:/app/docker
       - ${HOST_CONFIG_PATH:-./VueCutter/config.toml}:/app/config.toml:ro
+      - ${HOST_SERVERS_PATH:-./VueCutter/servers.json}:/app/servers.json:ro
       - /mnt/media:/mnt/media
       - type: bind
         source: /etc/smbcredentials

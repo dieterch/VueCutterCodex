@@ -75,6 +75,7 @@ Create the local env file:
 
 ```bash
 cp .env.example .env
+cp VueCutter/servers.example.json VueCutter/servers.json
 ```
 
 Edit `.env` and set at least:
@@ -86,37 +87,56 @@ VUECUTTER_REDIS_PORT=6379
 
 REDIS_PASSWORD=change-me
 HOST_CONFIG_PATH=./VueCutter/config.toml
-
-VUECUTTER_FILESERVER=192.168.15.10
-VUECUTTER_FILESERVER_MAC=10:bf:48:8d:5c:34
-VUECUTTER_PLEX_NAME=Main Plex
-VUECUTTER_PLEX_URL=http://192.168.15.10:32400
-VUECUTTER_PLEX_TOKEN=replace-me
-VUECUTTER_WOL_URL=http://192.168.15.65:5550/wolserver
+HOST_SERVERS_PATH=./VueCutter/servers.json
 ```
 
-Optional second Plex server:
+`HOST_SERVERS_PATH` should point to your local, untracked server inventory file. The repo now ships [`VueCutter/servers.example.json`](/home/developer/projects/VueCutterCodex/VueCutter/servers.example.json) as a template, and `VueCutter/servers.json` is ignored by Git.
 
-```bash
-VUECUTTER_FILESERVER_2=192.168.15.95
-VUECUTTER_PLEX_NAME_2=Homelab Plex
-VUECUTTER_PLEX_URL_2=http://192.168.15.95:32400
-VUECUTTER_PLEX_TOKEN_2=replace-me-too
+Edit `VueCutter/servers.json` and configure your Plex servers there:
+
+```json
+[
+  {
+    "id": "plex1",
+    "name": "Main Plex",
+    "url": "http://192.168.15.10:32400",
+    "token": "replace-me",
+    "fileserver": "192.168.15.10",
+    "media_root": ""
+  },
+  {
+    "id": "plex2",
+    "name": "Homelab Plex",
+    "url": "http://192.168.15.95:32400",
+    "token": "replace-me-too",
+    "fileserver": "192.168.15.95",
+    "media_root": ""
+  },
+  {
+    "id": "plex3",
+    "name": "Third Plex",
+    "url": "http://192.168.15.191:32400",
+    "token": "replace-me-three",
+    "fileserver": "replace-with-third-smb-host",
+    "media_root": ""
+  }
+]
 ```
 
 Notes:
 
 - each Plex server needs its own Plex token
-- both servers can reuse the same SMB credentials file under `/etc/smbcredentials`
-- both servers are expected to expose the same share structure, even if the SMB host differs
+- all SMB-backed servers can reuse the same SMB credentials file under `/etc/smbcredentials`
+- the third server at `192.168.15.191:32400` can therefore use the same credentials, but it still needs its own `fileserver` value for the SMB host
+- all servers are expected to expose the same share structure, even if the SMB host differs
 
-For the default SMB-in-container mode, leave this empty:
+For the default SMB-in-container mode, leave `media_root` empty:
 
-```bash
-VUECUTTER_MEDIA_ROOT=
+```json
+"media_root": ""
 ```
 
-That keeps `CutterInterface.mount()` active.
+That keeps `CutterInterface.mount()` active for that server.
 
 ## 5. Start the stack
 
@@ -148,7 +168,7 @@ Expected:
 - `8200` serves the Nuxt frontend
 - `5200/` returns backend JSON status
 - `5200/api/selection` returns Plex selection JSON
-- if a second server is configured, the frontend shows a server picker and keeps sleeping servers visible but disabled
+- if multiple servers are configured, the frontend shows a server picker and keeps sleeping servers visible but disabled
 
 ## 7. How SMB mounting works now
 
@@ -216,7 +236,7 @@ If you explicitly want host-managed mounts instead of container-managed SMB moun
 In that case:
 
 - mount the NAS shares on the host yourself
-- set `VUECUTTER_MEDIA_ROOT=/media` for the first Plex server, or `VUECUTTER_MEDIA_ROOT_2=/mnt/media` for the second Homelab Plex server
+- set `media_root` in the matching `servers.json` entry to the mounted path, for example `/media` or `/mnt/media`
 - bind the host media root into the containers again
 
 This mode is more infrastructure-heavy and is not the recommended default for your environment.

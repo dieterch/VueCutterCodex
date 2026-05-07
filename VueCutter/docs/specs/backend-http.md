@@ -107,13 +107,6 @@ Delegation:
 ### GET /restart
 Sendet SIGTERM an den eigenen Prozess.
 
-### GET /wakeonlan
-Sendet Magic Packet an Fileserver.
-
-### GET /wolserver
-Delegation:
-- plexdata.wolserver()
-
 ## Kritische Invarianten
 
 1. Plexdata ist singleton

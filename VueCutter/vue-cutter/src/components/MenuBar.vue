@@ -181,13 +181,6 @@ load_selection() // initial load
                 variant="solo"
                 @update:model-value="onChangeMovie"
             ></v-select>
-            <v-btn
-                v-if="section_error"
-                prepend-icon="mdi-nas"
-                class="ml-6"
-                href="/wolserver"
-                size="small"
-            >Send WakeOnLan</v-btn>
             <!--v-btn
                 v-if="section_error"
                 prepend-icon="mdi-reload"

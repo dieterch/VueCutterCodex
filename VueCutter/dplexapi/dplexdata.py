@@ -1,6 +1,7 @@
 from dplexapi.dcut import CutterInterface
 from dplexapi.dplex import PlexInterface
 import tomllib
+import json
 from io import BytesIO
 from jinja2 import Template
 import os
@@ -99,56 +100,42 @@ class Plexdata:
         self._active_server_id = self._pick_active_server(previous_active)
 
     def _load_server_configs(self):
+        config_path = os.getenv('PLEX_SERVERS_CONFIG', 'servers.json')
+        with open(config_path, mode='r', encoding='utf-8') as fp:
+            raw_configs = json.load(fp)
+
+        if not isinstance(raw_configs, list):
+            raise ValueError('Plex servers config must be a JSON array.')
+
         configs = []
-        primary = self._build_server_config('')
-        if primary:
-            configs.append(primary)
-        secondary = self._build_server_config('_2')
-        if secondary:
-            configs.append(secondary)
+        seen_ids = set()
+        for index, raw_config in enumerate(raw_configs):
+            if not isinstance(raw_config, dict):
+                raise ValueError(f'Plex server entry {index + 1} must be a JSON object.')
+            server_id = (raw_config.get('id') or f'plex{index + 1}').strip()
+            if not server_id:
+                raise ValueError(f'Plex server entry {index + 1} has an empty id.')
+            if server_id in seen_ids:
+                raise ValueError(f"Duplicate Plex server id '{server_id}' in servers config.")
+            seen_ids.add(server_id)
+
+            server_cfg = {
+                'id': server_id,
+                'name': (raw_config.get('name') or f'Plex {index + 1}').strip(),
+                'url': (raw_config.get('url') or '').strip(),
+                'token': (raw_config.get('token') or '').strip(),
+                'fileserver': (raw_config.get('fileserver') or '').strip(),
+                'media_root': (raw_config.get('media_root') or '').strip(),
+            }
+            if not (server_cfg['url'] and server_cfg['token'] and server_cfg['fileserver']):
+                raise ValueError(
+                    f"Plex server '{server_id}' is missing url, token, or fileserver in servers config."
+                )
+            configs.append(server_cfg)
+
         if not configs:
             raise ValueError('No Plex server configured.')
         return configs
-
-    def _build_server_config(self, suffix):
-        if suffix == '':
-            server_id = 'plex1'
-            default_name = 'Plex 1'
-            fallback = {
-                'url': self.cfg.get('plexurl', ''),
-                'token': self.cfg.get('plextoken', ''),
-                'fileserver': self.cfg.get('fileserver', ''),
-                'fileservermac': self.cfg.get('fileservermac', ''),
-                'wolurl': self.cfg.get('wolurl', ''),
-            }
-        else:
-            server_id = 'plex2'
-            default_name = 'Plex 2'
-            fallback = {
-                'url': '',
-                'token': '',
-                'fileserver': '',
-                'fileservermac': '',
-                'wolurl': '',
-            }
-
-        url = (os.getenv(f'VUECUTTER_PLEX_URL{suffix}', fallback['url']) or '').strip()
-        token = (os.getenv(f'VUECUTTER_PLEX_TOKEN{suffix}', fallback['token']) or '').strip()
-        fileserver = (os.getenv(f'VUECUTTER_FILESERVER{suffix}', fallback['fileserver']) or '').strip()
-        media_root = (os.getenv(f'VUECUTTER_MEDIA_ROOT{suffix}', '') or '').strip()
-        if not (url and token and fileserver):
-            return None
-
-        return {
-            'id': server_id,
-            'name': (os.getenv(f'VUECUTTER_PLEX_NAME{suffix}', '') or '').strip() or default_name,
-            'url': url,
-            'token': token,
-            'fileserver': fileserver,
-            'fileservermac': (os.getenv(f'VUECUTTER_FILESERVER_MAC{suffix}', fallback['fileservermac']) or '').strip(),
-            'wolurl': (os.getenv(f'VUECUTTER_WOL_URL{suffix}', fallback['wolurl']) or '').strip(),
-            'media_root': media_root,
-        }
 
     def _pick_active_server(self, preferred_server_id=None):
         if preferred_server_id in self._servers:
@@ -436,16 +423,6 @@ class Plexdata:
         self._active_server_id = server_id
         self._initialize_server_selection(server_id, force=False)
         return self.get_selection()
-
-    def wolserver(self):
-        _, ctx = self._ensure_active_server(require_online=False)
-        wolurl = ctx['config'].get('wolurl') or self.cfg.get('wolurl')
-        if not wolurl:
-            raise ValueError('No WOL server configured.')
-        try:
-            return requests.get(wolurl, timeout=30)
-        except requests.exceptions.HTTPError as err:
-            raise SystemExit(err)
 
     @property
     def section_title(self):
