@@ -13,7 +13,7 @@
     "url": "http://192.168.15.95:32400",
     "token": "replace-me-too",
     "fileserver": "192.168.15.95",
-    "media_root": ""
+    "media_root": "/mnt/media"
   },
   {
     "id": "plex3",

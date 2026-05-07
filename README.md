@@ -18,6 +18,16 @@ The backend and worker mount the needed NAS share themselves based on the curren
 
 Host-mounted media remains possible as an advanced optional mode, but it is no longer the default setup.
 
+## Current Operating Model
+
+The current deployment model is mixed:
+
+- `plex1`: SMB mode
+- `plex2` (Homelab Plex): host mode via `/mnt/media`
+- `plex3`: SMB mode
+
+This is the configuration the current code and example files are meant to reflect.
+
 ## 1. Install Docker
 
 Make sure Docker and Docker Compose work on the host.
@@ -110,7 +120,7 @@ Edit `VueCutter/servers.json` and configure your Plex servers there:
     "url": "http://192.168.15.95:32400",
     "token": "replace-me-too",
     "fileserver": "192.168.15.95",
-    "media_root": ""
+    "media_root": "/mnt/media"
   },
   {
     "id": "plex3",
@@ -127,6 +137,7 @@ Notes:
 
 - each Plex server needs its own Plex token
 - all SMB-backed servers can reuse the same SMB credentials file under `/etc/smbcredentials`
+- only `plex2` is currently intended to run in host mode
 - the third server at `192.168.15.191:32400` can therefore use the same credentials, but it still needs its own `fileserver` value for the SMB host
 - all servers are expected to expose the same share structure, even if the SMB host differs
 
@@ -205,6 +216,26 @@ This is done on demand by the backend when you request:
 
 So installation does not require one mountpoint per share on the host.
 
+### SMB write permissions for cutting
+
+Frame preview only needs read access. Cutting needs write access in the movie directory because the worker creates temporary files such as `part0.ts` in the source folder during split/join.
+
+For SMB-backed servers such as `plex1` and `plex3`, this means:
+
+- the mounted share must be writable from inside the `worker` container
+- the SMB login used in `/etc/smbcredentials/vuecutter` must have effective write access to the movie directory
+- if Samba exports the media share, its effective write identity should match the Plex-owned filesystem layout
+
+The current working model for `plex3` is to configure Samba so SMB writes run as Plex, for example:
+
+```ini
+force user = plex
+force group = plex
+read only = no
+```
+
+If preview works but cut fails with `Permission denied` or ffmpeg cannot create `part0.ts`, check the share permissions first.
+
 ## 8. Behavior when the NAS is offline
 
 Current intended behavior:
@@ -241,6 +272,8 @@ In that case:
 
 This mode is more infrastructure-heavy and is not the recommended default for your environment.
 
+For the current setup, only `plex2` should use host mode, with `media_root` set to `/mnt/media`.
+
 ## 10. Troubleshooting
 
 ### Backend root works but preview fails
@@ -269,6 +302,20 @@ Check backend logs:
 ```bash
 docker compose -f docker-compose.yml logs --tail=150 backend
 ```
+
+### Preview works but cut fails on an SMB-backed server
+
+This usually means the share is mounted and readable, but not writable from the `worker` container.
+
+Check inside the worker container:
+
+```bash
+docker compose exec worker sh
+ls -la /app/dplexapi/mnt
+touch "/app/dplexapi/mnt/<path-to-movie-folder>/codex-write-test.tmp"
+```
+
+If `touch` fails with `Permission denied`, fix the Samba/filesystem write model on the server that exports the share.
 
 ### Frontend works on `8200`, backend on `5200`
 

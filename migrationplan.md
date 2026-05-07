@@ -11,10 +11,10 @@ Target runtime is a Docker Compose stack with separate services for:
 - `worker`: RQ worker for cutting and analysis jobs
 - `redis`: queue backend
 
-Media access default:
+Media access current state:
 
-- use host-mounted volumes
-- do not rely on CIFS/SMB mounts from inside containers in phase 1
+- `plex1` and `plex3` use SMB/CIFS mounts from inside the containers
+- `plex2` uses a host-mounted `/mnt/media` path
 
 This keeps the risky filesystem and media-processing behavior stable while modernizing the frontend and deployment model.
 
@@ -132,16 +132,17 @@ Frontend rules:
 
 ### 5. Media access and filesystem model
 
-Use host-mounted media volumes as the primary deployment model.
+Current runtime uses a mixed filesystem model.
 
 Implementation changes needed:
 
-- configure a host media root in backend config
-- map Plex-reported file locations to the mounted host path visible inside backend/worker containers
-- ensure cutter path resolution works without container-side CIFS mounting
-- keep mount-related code isolated so CIFS support can remain optional for legacy/manual deployments
+- keep per-server mount mode in configuration
+- support host-mounted media roots per server where `media_root` is set
+- support SMB/CIFS mounting per server where `media_root` is empty
+- keep mount-related code isolated so mixed deployments remain possible
+- consider moving cut temp output to a dedicated writable work directory for SMB-backed recordings
 
-This is the key containerization change because it removes privileged mount requirements from normal operation.
+This is the current operational compromise while the frontend and backend migration continues.
 
 ### 6. Future feature foundations
 
@@ -215,4 +216,4 @@ Phase 1 performance work:
 - Docker Compose is the required local/dev runtime model.
 - Docker must be installed on the machine before the stack can be started.
 - Standard Docker is preferred over rootless Docker for this app.
-- Media access default is host-mounted volumes, not container-managed SMB/CIFS mounts.
+- Media access currently uses a mixed model rather than one global default.

@@ -6,7 +6,8 @@
 - Differentiate CIFS permission errors, missing credentials, NAS offline, and missing media file paths in backend responses.
 - Add one retry/recheck path for transient NAS unavailability before returning media-unavailable errors.
 - Make the SMB credentials path configurable in backend code instead of relying on one fixed path.
-- Decide final deployment default: host-mounted media vs SMB-in-container, and document only one primary path.
+- Document and preserve the current mixed deployment model: `plex1`/`plex3` via SMB, `plex2` via host-mounted `/mnt/media`.
+- Consider a dedicated writable work directory for cut temp files so SMB-backed recordings do not require direct write access in the source folder.
 - Validate CIFS-in-container on the production Docker host and stop trying to support it on restricted dev guests.
 
 ## Frontend
