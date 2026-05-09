@@ -2,6 +2,7 @@ services:
   redis:
     image: redis:7-alpine
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    restart: unless-stopped
     ports:
       - "${VUECUTTER_REDIS_PORT:-6379}:6379"
     volumes:
@@ -11,6 +12,7 @@ services:
     build:
       context: .
       dockerfile: docker/backend.Dockerfile
+    restart: unless-stopped
     privileged: true
     depends_on:
       - redis
@@ -42,6 +44,7 @@ services:
     build:
       context: .
       dockerfile: docker/backend.Dockerfile
+    restart: unless-stopped
     privileged: true
     depends_on:
       - redis
@@ -72,6 +75,7 @@ services:
     build:
       context: .
       dockerfile: docker/frontend.Dockerfile
+    restart: unless-stopped
     depends_on:
       - backend
     environment:
