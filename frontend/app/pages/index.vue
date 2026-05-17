@@ -59,6 +59,14 @@ const serverItems = computed(() => (
 const activeServer = computed(() => (
   (selection.value?.servers ?? []).find((server) => server.id === selection.value?.server) ?? null
 ))
+const activeServerMachineIdentifier = computed(() => activeServer.value?.machine_identifier?.trim() || '')
+const activeServerWebUrl = computed(() => {
+  const baseUrl = activeServer.value?.url?.trim()
+  if (!baseUrl || activeServer.value?.status !== 'online') {
+    return ''
+  }
+  return `${baseUrl.replace(/\/+$/, '')}/web/index.html`
+})
 const mountMethodText = computed(() => {
   if (!activeServer.value?.mount_method) {
     return ''
@@ -95,6 +103,11 @@ const canOpenCutDialog = computed(() => {
   return markersFormValid.value || safeCutlist.value.length > 0
 })
 const movieAnalyzeRunning = useState('movieAnalyzeRunning', () => false)
+const canOpenActiveServer = computed(() => Boolean(activeServerWebUrl.value))
+const canOpenSelectedItemInPlex = computed(() => (
+  Boolean(activeServerWebUrl.value) &&
+  Boolean(movieInfo.value?.ratingKey)
+))
 const positionString = computed({
   get: () => posToStr(positionSeconds.value),
   set: (value: string) => {
@@ -259,6 +272,37 @@ function resetEverything() {
   resetAnalysis()
 }
 
+function openNamedTab(url: string, target: string) {
+  if (!url) {
+    return
+  }
+  window.open(url, target, 'noopener')
+}
+
+function openActiveServerInPlex() {
+  if (!activeServer.value?.id || !activeServerWebUrl.value) {
+    return
+  }
+  openNamedTab(activeServerWebUrl.value, `vuecutter-plex-server-${activeServer.value.id}`)
+}
+
+function plexItemUrl() {
+  if (!activeServer.value?.id || !activeServerWebUrl.value || !activeServerMachineIdentifier.value || !movieInfo.value?.ratingKey) {
+    return ''
+  }
+  const key = encodeURIComponent(`/library/metadata/${movieInfo.value.ratingKey}`)
+  const serverId = encodeURIComponent(activeServerMachineIdentifier.value)
+  return `${activeServerWebUrl.value}#!/server/${serverId}/details?key=${key}`
+}
+
+function openSelectedItemInPlex() {
+  const url = plexItemUrl()
+  if (!url || !activeServer.value?.id) {
+    return
+  }
+  openNamedTab(url, `vuecutter-plex-item-${activeServer.value.id}`)
+}
+
 function analysisBoundaryLabel(kind: string) {
   switch (kind) {
     case 'content_start':
@@ -385,6 +429,17 @@ async function reloadCurrentSection() {
                   density="compact"
                   hide-details
                   @update:model-value="changeServer"
+                />
+              </div>
+
+              <div class="selection-field selection-field-server-link">
+                <v-btn
+                  v-if="canOpenActiveServer"
+                  size="small"
+                  variant="text"
+                  icon="mdi-open-in-new"
+                  title="Open active Plex server"
+                  @click="openActiveServerInPlex"
                 />
               </div>
 
@@ -525,6 +580,14 @@ async function reloadCurrentSection() {
                   <v-chip v-if="mountMethodText" size="small" variant="tonal" prepend-icon="mdi-link" class="mount-chip">
                     {{ mountMethodText }}
                   </v-chip>
+                  <v-btn
+                    v-if="canOpenSelectedItemInPlex"
+                    size="small"
+                    variant="text"
+                    icon="mdi-open-in-new"
+                    title="Open selected title in Plex"
+                    @click="openSelectedItemInPlex"
+                  />
                   <v-text-field
                     v-model="positionString"
                     label="Position"
@@ -941,6 +1004,12 @@ async function reloadCurrentSection() {
 .preview-sidebar {
   flex: 0 0 142px;
   max-width: 142px;
+}
+
+.selection-field-server-link {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
 }
 
 .preview-toolbar {

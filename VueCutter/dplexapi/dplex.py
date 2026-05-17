@@ -215,6 +215,7 @@ class PlexInterface:
             'duration':movie.duration // 60000,
             'duration_sec_rest': (movie.duration % 60000) // 1000, 
             'year':movie.year,
+            'ratingKey': getattr(movie, 'ratingKey', None),
             'guid':movie.guid.split('/')[-1],
             'streamURL':movie.getStreamURL()
         }

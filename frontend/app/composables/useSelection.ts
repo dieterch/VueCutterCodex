@@ -2,6 +2,7 @@ type ServerState = {
   id: string
   name: string
   url: string
+  machine_identifier?: string
   status: 'online' | 'offline'
   reason?: string
   selectable: boolean
@@ -30,6 +31,7 @@ type MovieInfo = {
   duration?: number
   duration_ms?: number
   year?: number
+  ratingKey?: string | number
 }
 
 export function useSelection() {

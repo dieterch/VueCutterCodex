@@ -237,10 +237,14 @@ class Plexdata:
         ctx = self._servers[server_id]
         reason = ctx['reason'].strip() if ctx['reason'] else ''
         mount_method = 'host' if ctx['config'].get('media_root') else 'smb'
+        machine_identifier = ''
+        if ctx.get('plex') is not None:
+            machine_identifier = getattr(ctx['plex'].server, 'machineIdentifier', '') or ''
         return {
             'id': server_id,
             'name': ctx['config']['name'],
             'url': ctx['config']['url'],
+            'machine_identifier': machine_identifier,
             'status': ctx['status'],
             'reason': reason,
             'selectable': ctx['status'] == 'online',
